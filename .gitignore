@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# Streamlit
+.streamlit/
+
+# API Keys & Sensitive Data
+.env
+config/secrets.py
+*.key
+*.pem
+
+# Temporary Files
+*.tmp
+*.temp
+*.log
+*.mp4
+*.mp3
+*.wav
+*.jpg
+*.jpeg
+*.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project Specific
+static/assets/output/
+static/assets/temp/
+*.TEMP_MPY*
+video_*.mp4
+tts_*.mp3

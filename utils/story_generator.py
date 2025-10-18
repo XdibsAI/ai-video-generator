@@ -1,0 +1,252 @@
+import requests
+import json
+import time
+import streamlit as st
+from config.settings import OPENROUTER_API_KEY, OPENROUTER_BASE_URL, DEFAULT_MODEL
+
+class StoryGenerator:
+    def __init__(self):
+        self.api_key = None
+        self.base_url = OPENROUTER_BASE_URL
+        self.model = DEFAULT_MODEL
+    
+    def generate_stories(self, niche, duration_seconds, style, language, user_description=""):
+        """Generate 3 story options using OpenRouter API - OPTIMIZED"""
+        
+        # Cache key untuk menghindari generate berulang
+        cache_key = f"{niche}_{duration_seconds}_{language}_{user_description}"
+        
+        # Cek cache dulu
+        if hasattr(st.session_state, 'story_cache') and cache_key in st.session_state.story_cache:
+            st.info("🔄 Menggunakan cerita dari cache...")
+            return st.session_state.story_cache[cache_key]
+        
+        # ✅ GUNAKAN API JIKA API KEY ADA
+        if self.api_key and self.api_key != "your_actual_openrouter_api_key_here":
+            stories = self._generate_multiple_with_api(niche, duration_seconds, style, language, user_description)
+        else:
+            # Fallback ke dummy stories
+            st.error("❌ API Key tidak tersedia. Menggunakan mode demo.")
+            stories = self._generate_dummy_stories(niche, duration_seconds, style, language, user_description)
+        
+        # Simpan ke cache
+        if not hasattr(st.session_state, 'story_cache'):
+            st.session_state.story_cache = {}
+        st.session_state.story_cache[cache_key] = stories
+        
+        return stories
+    
+    def _generate_multiple_with_api(self, niche, duration_seconds, style, language, user_description):
+        """Generate 3 story options using OpenRouter API - OPTIMIZED"""
+        try:
+            # Estimate word count
+            word_range = self._estimate_word_count(duration_seconds)
+            target_words = (word_range[0] + word_range[1]) // 2
+            
+            prompt = self._build_multi_prompt(niche, target_words, style, language, user_description)
+            
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://ai-video-generator.com",
+                "X-Title": "AI Video Generator"
+            }
+            
+            data = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "max_tokens": target_words * 6,
+                "temperature": 0.8,
+                "top_p": 0.9
+            }
+            
+            # Progress placeholder
+            progress_text = st.empty()
+            progress_text.info("🌐 Menghubungkan ke AI...")
+            
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=45
+            )
+            
+            progress_text.empty()
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'choices' in result and len(result['choices']) > 0:
+                    stories_text = result['choices'][0]['message']['content'].strip()
+                    stories = self._parse_multiple_stories(stories_text)
+                    
+                    if len(stories) >= 3:
+                        return stories[:3]
+                    else:
+                        # Jika parsing failed, create variations
+                        main_story = stories[0] if stories else self._generate_dummy_story(niche, duration_seconds, style, language, user_description)
+                        return self._create_variations(main_story, niche)
+                else:
+                    raise Exception("Invalid response format from API")
+            else:
+                error_msg = f"API Error {response.status_code}"
+                if response.status_code == 401:
+                    error_msg += ": Invalid API Key"
+                elif response.status_code == 429:
+                    error_msg += ": Rate limit exceeded"
+                raise Exception(error_msg)
+                
+        except requests.exceptions.Timeout:
+            st.warning("⏰ API timeout. Using demo mode.")
+            return self._generate_dummy_stories(niche, duration_seconds, style, language, user_description)
+        except requests.exceptions.ConnectionError:
+            st.warning("🌐 Connection error. Using demo mode.")
+            return self._generate_dummy_stories(niche, duration_seconds, style, language, user_description)
+        except Exception as e:
+            st.error(f"❌ API Error: {str(e)}")
+            return self._generate_dummy_stories(niche, duration_seconds, style, language, user_description)
+    
+    def _build_multi_prompt(self, niche, target_words, style, language, user_description):
+        """Build prompt for generating multiple stories"""
+        
+        language_names = {
+            "id": "Bahasa Indonesia",
+            "en": "English"
+        }
+        
+        lang_name = language_names.get(language, "Bahasa Indonesia")
+        
+        prompt = f"""
+Buatkan 3 OPSI NARASI VIDEO yang berbeda untuk media sosial dengan ketentuan:
+
+TOPIK: {niche}
+GAYA: {style}
+BAHASA: {lang_name}
+TARGET: {target_words} kata per narasi
+DESKRIPSI: {user_description if user_description else "Tidak ada"}
+
+INSTRUKSI:
+1. Buat 3 versi narasi yang BERBEDA dengan sudut pandang unik
+2. Setiap narasi harus engaging dan mudah dipahami
+3. Struktur: Pembukaan menarik -> konten utama -> penutup berkesan
+4. Gunakan bahasa yang natural dan conversational
+5. Setiap opsi harus memiliki karakteristik berbeda
+
+FORMAT OUTPUT:
+OPSI 1:
+[Narasi opsi 1 lengkap di sini]
+
+OPSI 2: 
+[Narasi opsi 2 lengkap di sini]
+
+OPSI 3:
+[Narasi opsi 3 lengkap di sini]
+
+Hanya output 3 opsi narasi saja tanpa penjelasan tambahan.
+"""
+        return prompt
+    
+    def _parse_multiple_stories(self, stories_text):
+        """Parse the response to extract 3 stories"""
+        stories = []
+        lines = stories_text.split('\n')
+        current_story = []
+        
+        for line in lines:
+            line = line.strip()
+            # Cari header opsi
+            if line.startswith(('OPSI 1:', 'OPSI 2:', 'OPSI 3:', 'OPTION 1:', 'OPTION 2:', 'OPTION 3:')):
+                if current_story:
+                    stories.append(' '.join(current_story).strip())
+                    current_story = []
+            elif line and not line.startswith('---') and not line.startswith('==='):
+                current_story.append(line)
+        
+        if current_story:
+            stories.append(' '.join(current_story).strip())
+        
+        # Fallback: split by double newlines
+        if len(stories) < 3:
+            stories = [s.strip() for s in stories_text.split('\n\n') if s.strip()]
+            stories = [s for s in stories if not s.startswith(('OPSI', 'OPTION'))]
+        
+        return stories if stories else [stories_text]
+    
+    def _create_variations(self, base_story, niche):
+        """Create 3 variations from one story"""
+        variations = []
+        
+        # Variation 1: Original
+        variations.append(base_story)
+        
+        # Variation 2: More emotional
+        emotional_story = base_story
+        emotional_words = ["menakjubkan", "luar biasa", "mengagumkan", "fantastis"]
+        for word in emotional_words:
+            if word in emotional_story:
+                emotional_story = emotional_story.replace(word, f"**{word}**")
+        variations.append(emotional_story)
+        
+        # Variation 3: Question-based
+        lines = base_story.split('. ')
+        if len(lines) > 1:
+            question_story = f"Tahukah kamu tentang {niche}? {lines[0] if lines else ''}. "
+            question_story += ' '.join(lines[1:]) if len(lines) > 1 else base_story
+        else:
+            question_story = f"Pernah bertanya-tanya tentang {niche}? {base_story}"
+        variations.append(question_story)
+        
+        return variations
+    
+    def _generate_dummy_stories(self, niche, duration_seconds, style, language, user_description):
+        """Generate 3 dummy story options for testing"""
+        base_story = self._generate_dummy_story(niche, duration_seconds, style, language, user_description)
+        return self._create_variations(base_story, niche)
+    
+    def _generate_dummy_story(self, niche, duration_seconds, style, language, user_description):
+        """Generate single dummy story"""
+        stories = {
+            "id": {
+                "Fakta Menarik": f"""Tahukah kamu tentang {niche}? Fakta-fakta menakjubkan ini akan membuatmu terkagum!
+
+Dalam {duration_seconds} detik ke depan, kita akan menjelajahi dunia {niche} yang penuh kejutan. Setiap detail punya cerita uniknya sendiri.
+
+Dari sejarah hingga penemuan modern, {niche} terus membuktikan bahwa dunia ini penuh dengan keajaiban!""",
+                
+                "Motivasi": f"""Hari ini adalah awal yang baru untuk perjalanan {niche} mu!
+
+Dalam {duration_seconds} detik ini, mari kita temukan kekuatan yang selama ini ada dalam dirimu. Setiap langkah kecil membawamu lebih dekat ke impian.
+
+Percayalah, kamu memiliki semua yang dibutuhkan untuk meraih kesuksesan dalam {niche}!"""
+            },
+            "en": {
+                "Fakta Menarik": f"""Did you know about {niche}? These amazing facts will blow your mind!
+
+In the next {duration_seconds} seconds, we'll explore the world of {niche} full of surprises. Every detail has its unique story.
+
+From history to modern discoveries, {niche} continues to prove that our world is full of wonders!"""
+            }
+        }
+        
+        lang_stories = stories.get(language, stories["id"])
+        return lang_stories.get(niche, "Narasi akan muncul di sini setelah di-generate.")
+    
+    def _estimate_word_count(self, duration_seconds):
+        """Estimate word count based on duration"""
+        if duration_seconds == 30:
+            return (50, 80)
+        elif duration_seconds == 60:
+            return (100, 150)
+        elif duration_seconds == 90:
+            return (150, 200)
+        else:
+            words_per_second = 2.5
+            estimated_words = int(duration_seconds * words_per_second)
+            return (estimated_words - 20, estimated_words + 20)
+
+# Singleton instance
+story_generator = StoryGenerator()
