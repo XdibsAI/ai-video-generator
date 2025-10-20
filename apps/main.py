@@ -605,7 +605,7 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             ffmpeg_status = "✅" if check_ffmpeg() else "❌"
-           st.info(f"🎥 FFmpeg: {ffmpeg_status}")
+            st.info(f"🎥 FFmpeg: {ffmpeg_status}")
         with col2:
             moviepy_status = "✅" if MOVIEPY_AVAILABLE else "❌"
             st.info(f"🎬 MoviePy: {moviepy_status}")

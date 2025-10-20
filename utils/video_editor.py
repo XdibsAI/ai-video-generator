@@ -13,7 +13,7 @@ if not hasattr(Image, 'ANTIALIAS'):
 # Try to import MoviePy with multiple fallbacks
 MOVIEPY_AVAILABLE = False
 try:
-    from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip, AudioFileClip, TextClip
+    from moviepy.editor import VideoFileClip, ImageClip, concatenate_videoclips, CompositeVideoClip, AudioFileClip, TextClip, ColorClip
     from moviepy.video.io.bindings import mplfig_to_npimage
     import numpy as np
     MOVIEPY_AVAILABLE = True
@@ -27,60 +27,43 @@ class VideoEditor:
     def create_video(self, media_files, audio_path, duration, video_format='short', 
                     subtitle_text="", font_size=60, text_color='white', 
                     text_position='middle', font_name='Arial-Bold',
-                    background_music=None, music_volume=0.3):
-        """Create video dengan proper audio-video synchronization"""
+                    background_music=None, music_volume=0.3,
+                    mode='video'):  # ✅ NEW: Added mode parameter
+        """Create video atau teks-only dengan proper audio synchronization"""
         
         try:
             if not MOVIEPY_AVAILABLE:
                 return self._create_fallback_video(media_files, audio_path, duration, video_format)
             
-            st.info("🎬 Starting video creation with audio synchronization...")
+            if mode == 'text_only':
+                st.info("🎬 Creating TEXT-ONLY karaoke video...")
+                return self._create_text_only_video(
+                    audio_path, duration, video_format, subtitle_text,
+                    font_size, text_color, text_position, background_music, music_volume
+                )
+            else:
+                st.info("🎬 Starting video creation with audio synchronization...")
+                return self._create_standard_video(
+                    media_files, audio_path, duration, video_format,
+                    subtitle_text, font_size, text_color, text_position,
+                    background_music, music_volume
+                )
             
+        except Exception as e:
+            st.error(f"❌ Video creation failed: {str(e)}")
+            import traceback
+            st.error(f"Detailed error: {traceback.format_exc()}")
+            return self._create_fallback_video(media_files, audio_path, duration, video_format)
+    
+    def _create_text_only_video(self, audio_path, duration, video_format, subtitle_text,
+                               font_size, text_color, text_position, background_music, music_volume):
+        """Create text-only karaoke video dengan background color"""
+        try:
             # Video settings
             if video_format == 'short':
                 width, height = 1080, 1920  # 9:16
             else:
                 width, height = 1920, 1080  # 16:9
-            
-            clips = []
-            temp_files = []
-            
-            # Process each media file
-            for media_file in media_files:
-                try:
-                    # Save uploaded file temporarily
-                    temp_path = os.path.join(self.temp_dir, f"temp_{uuid.uuid4().hex[:8]}_{media_file.name}")
-                    with open(temp_path, 'wb') as f:
-                        f.write(media_file.getvalue())
-                    temp_files.append(temp_path)
-                    
-                    # Create clip based on file type
-                    if media_file.type.startswith('video'):
-                        clip = VideoFileClip(temp_path)
-                        clip_duration = min(10, clip.duration)
-                        clip = clip.subclip(0, clip_duration)
-                    else:  # image
-                        clip = ImageClip(temp_path)
-                        clip_duration = 5
-                        clip = clip.set_duration(clip_duration)
-                    
-                    # Resize to target dimensions
-                    clip = clip.resize(newsize=(width, height))
-                    clips.append(clip)
-                    
-                except Exception as e:
-                    st.warning(f"⚠️ Skipped {media_file.name}: {str(e)}")
-                    continue
-            
-            if not clips:
-                st.error("❌ No valid media files processed")
-                return self._create_fallback_video(media_files, audio_path, duration, video_format)
-            
-            # Create final video clip
-            if len(clips) == 1:
-                final_clip = clips[0]
-            else:
-                final_clip = concatenate_videoclips(clips, method="compose")
             
             # Get actual audio duration
             audio_duration = 0
@@ -89,63 +72,49 @@ class VideoEditor:
                     audio_clip_test = AudioFileClip(audio_path)
                     audio_duration = audio_clip_test.duration
                     audio_clip_test.close()
-                    st.info(f"🎵 Audio duration: {audio_duration:.1f}s / Video target: {duration}s")
+                    st.info(f"🎵 Audio duration: {audio_duration:.1f}s / Target: {duration}s")
                 except Exception as e:
                     st.warning(f"⚠️ Could not read audio duration: {str(e)}")
                     audio_duration = duration
             
-            # Adjust video duration based on audio
-            if audio_duration > 0:
-                # Use the shorter duration between audio and target
-                actual_duration = min(audio_duration, duration)
-                
-                if final_clip.duration > actual_duration:
-                    final_clip = final_clip.subclip(0, actual_duration)
-                elif final_clip.duration < actual_duration:
-                    final_clip = self._loop_clip(final_clip, actual_duration)
-                
-                st.info(f"📊 Using synchronized duration: {actual_duration:.1f}s")
-            else:
-                # No audio, use target duration
-                if final_clip.duration > duration:
-                    final_clip = final_clip.subclip(0, duration)
-                elif final_clip.duration < duration:
-                    final_clip = self._loop_clip(final_clip, duration)
+            # Use the shorter duration between audio and target
+            actual_duration = min(audio_duration, duration) if audio_duration > 0 else duration
+            
+            # Create solid color background
+            background = ColorClip(size=(width, height), color=(0, 0, 0))  # Black background
+            background = background.set_duration(actual_duration)
+            
+            final_clip = background
             
             # Add audio if available
-            final_audio_duration = final_clip.duration
             if audio_path and os.path.exists(audio_path):
                 try:
                     audio_clip = AudioFileClip(audio_path)
                     
                     # Match audio duration to video duration
-                    if audio_clip.duration > final_audio_duration:
+                    if audio_clip.duration > actual_duration:
                         # Audio too long - trim it
-                        audio_clip = audio_clip.subclip(0, final_audio_duration)
+                        audio_clip = audio_clip.subclip(0, actual_duration)
                         st.info("✂️ Audio trimmed to match video duration")
-                    elif audio_clip.duration < final_audio_duration:
+                    elif audio_clip.duration < actual_duration:
                         # Audio too short - loop it
-                        audio_clip = self._loop_audio(audio_clip, final_audio_duration)
+                        audio_clip = self._loop_audio(audio_clip, actual_duration)
                         st.info("🔁 Audio looped to match video duration")
                     
                     final_clip = final_clip.set_audio(audio_clip)
-                    st.success("✅ Audio synchronized with video")
+                    st.success("✅ Audio synchronized with text video")
                     
                 except Exception as e:
                     st.warning(f"⚠️ Could not add audio: {str(e)}")
-                    final_audio_duration = final_clip.duration
-            else:
-                final_audio_duration = final_clip.duration
             
             # Add PUNCTUATION-AWARE karaoke subtitles
             if subtitle_text:
                 try:
-                    # Use actual audio duration for karaoke timing
                     final_clip = self._add_punctuation_aware_karaoke(
                         final_clip, subtitle_text, font_size, text_color, 
-                        text_position, final_audio_duration
+                        text_position, actual_duration
                     )
-                    st.success("✅ Punctuation-aware karaoke added!")
+                    st.success("✅ Punctuation-aware karaoke added to text-only video!")
                 except Exception as e:
                     st.warning(f"⚠️ Could not add karaoke: {str(e)}")
                     # Fallback to normal subtitle
@@ -155,7 +124,7 @@ class VideoEditor:
             if background_music and os.path.exists(background_music):
                 try:
                     bg_music_clip = AudioFileClip(background_music).volumex(music_volume)
-                    bg_music_clip = bg_music_clip.subclip(0, final_audio_duration)
+                    bg_music_clip = bg_music_clip.subclip(0, actual_duration)
                     
                     if final_clip.audio:
                         # Combine narration with background music
@@ -169,10 +138,10 @@ class VideoEditor:
                     st.warning(f"⚠️ Could not add background music: {str(e)}")
             
             # Export video
-            output_filename = f"video_{uuid.uuid4().hex[:8]}.mp4"
+            output_filename = f"text_karaoke_{uuid.uuid4().hex[:8]}.mp4"
             output_path = os.path.join(self.temp_dir, sanitize_filename(output_filename))
             
-            st.info("📤 Exporting synchronized video...")
+            st.info("📤 Exporting text-only karaoke video...")
             
             # Write video file with optimized settings
             final_clip.write_videofile(
@@ -181,23 +150,181 @@ class VideoEditor:
                 audio_codec='aac',
                 verbose=False,
                 logger=None,
-                fps=15,
+                fps=24,
                 bitrate="1500k",
                 threads=4
             )
             
             # Cleanup
-            self._cleanup_clips(clips + [final_clip], temp_files)
+            final_clip.close()
             
-            st.success(f"✅ Synchronized video created: {os.path.basename(output_path)}")
+            st.success(f"✅ Text-only karaoke video created: {os.path.basename(output_path)}")
             return output_path
             
         except Exception as e:
-            st.error(f"❌ Video creation failed: {str(e)}")
-            import traceback
-            st.error(f"Detailed error: {traceback.format_exc()}")
-            return self._create_fallback_video(media_files, audio_path, duration, video_format)
+            st.error(f"❌ Text-only video creation failed: {str(e)}")
+            raise e
     
+    def _create_standard_video(self, media_files, audio_path, duration, video_format,
+                              subtitle_text, font_size, text_color, text_position,
+                              background_music, music_volume):
+        """Create standard video dengan media files (existing functionality)"""
+        # Video settings
+        if video_format == 'short':
+            width, height = 1080, 1920  # 9:16
+        else:
+            width, height = 1920, 1080  # 16:9
+        
+        clips = []
+        temp_files = []
+        
+        # Process each media file
+        for media_file in media_files:
+            try:
+                # Save uploaded file temporarily
+                temp_path = os.path.join(self.temp_dir, f"temp_{uuid.uuid4().hex[:8]}_{media_file.name}")
+                with open(temp_path, 'wb') as f:
+                    f.write(media_file.getvalue())
+                temp_files.append(temp_path)
+                
+                # Create clip based on file type
+                if media_file.type.startswith('video'):
+                    clip = VideoFileClip(temp_path)
+                    clip_duration = min(10, clip.duration)
+                    clip = clip.subclip(0, clip_duration)
+                else:  # image
+                    clip = ImageClip(temp_path)
+                    clip_duration = 5
+                    clip = clip.set_duration(clip_duration)
+                
+                # Resize to target dimensions
+                clip = clip.resize(newsize=(width, height))
+                clips.append(clip)
+                
+            except Exception as e:
+                st.warning(f"⚠️ Skipped {media_file.name}: {str(e)}")
+                continue
+        
+        if not clips:
+            st.error("❌ No valid media files processed")
+            return self._create_fallback_video(media_files, audio_path, duration, video_format)
+        
+        # Create final video clip
+        if len(clips) == 1:
+            final_clip = clips[0]
+        else:
+            final_clip = concatenate_videoclips(clips, method="compose")
+        
+        # Get actual audio duration
+        audio_duration = 0
+        if audio_path and os.path.exists(audio_path):
+            try:
+                audio_clip_test = AudioFileClip(audio_path)
+                audio_duration = audio_clip_test.duration
+                audio_clip_test.close()
+                st.info(f"🎵 Audio duration: {audio_duration:.1f}s / Video target: {duration}s")
+            except Exception as e:
+                st.warning(f"⚠️ Could not read audio duration: {str(e)}")
+                audio_duration = duration
+        
+        # Adjust video duration based on audio
+        if audio_duration > 0:
+            # Use the shorter duration between audio and target
+            actual_duration = min(audio_duration, duration)
+            
+            if final_clip.duration > actual_duration:
+                final_clip = final_clip.subclip(0, actual_duration)
+            elif final_clip.duration < actual_duration:
+                final_clip = self._loop_clip(final_clip, actual_duration)
+            
+            st.info(f"📊 Using synchronized duration: {actual_duration:.1f}s")
+        else:
+            # No audio, use target duration
+            if final_clip.duration > duration:
+                final_clip = final_clip.subclip(0, duration)
+            elif final_clip.duration < duration:
+                final_clip = self._loop_clip(final_clip, duration)
+        
+        # Add audio if available
+        final_audio_duration = final_clip.duration
+        if audio_path and os.path.exists(audio_path):
+            try:
+                audio_clip = AudioFileClip(audio_path)
+                
+                # Match audio duration to video duration
+                if audio_clip.duration > final_audio_duration:
+                    # Audio too long - trim it
+                    audio_clip = audio_clip.subclip(0, final_audio_duration)
+                    st.info("✂️ Audio trimmed to match video duration")
+                elif audio_clip.duration < final_audio_duration:
+                    # Audio too short - loop it
+                    audio_clip = self._loop_audio(audio_clip, final_audio_duration)
+                    st.info("🔁 Audio looped to match video duration")
+                
+                final_clip = final_clip.set_audio(audio_clip)
+                st.success("✅ Audio synchronized with video")
+                
+            except Exception as e:
+                st.warning(f"⚠️ Could not add audio: {str(e)}")
+                final_audio_duration = final_clip.duration
+        else:
+            final_audio_duration = final_clip.duration
+        
+        # Add PUNCTUATION-AWARE karaoke subtitles
+        if subtitle_text:
+            try:
+                # Use actual audio duration for karaoke timing
+                final_clip = self._add_punctuation_aware_karaoke(
+                    final_clip, subtitle_text, font_size, text_color, 
+                    text_position, final_audio_duration
+                )
+                st.success("✅ Punctuation-aware karaoke added!")
+            except Exception as e:
+                st.warning(f"⚠️ Could not add karaoke: {str(e)}")
+                # Fallback to normal subtitle
+                final_clip = self._add_normal_subtitle(final_clip, subtitle_text, font_size, text_color, text_position)
+        
+        # Add background music if provided
+        if background_music and os.path.exists(background_music):
+            try:
+                bg_music_clip = AudioFileClip(background_music).volumex(music_volume)
+                bg_music_clip = bg_music_clip.subclip(0, final_audio_duration)
+                
+                if final_clip.audio:
+                    # Combine narration with background music
+                    from moviepy.audio.AudioClip import CompositeAudioClip
+                    final_audio = CompositeAudioClip([final_clip.audio, bg_music_clip])
+                    final_clip = final_clip.set_audio(final_audio)
+                else:
+                    final_clip = final_clip.set_audio(bg_music_clip)
+                st.success("✅ Background music added")
+            except Exception as e:
+                st.warning(f"⚠️ Could not add background music: {str(e)}")
+        
+        # Export video
+        output_filename = f"video_{uuid.uuid4().hex[:8]}.mp4"
+        output_path = os.path.join(self.temp_dir, sanitize_filename(output_filename))
+        
+        st.info("📤 Exporting synchronized video...")
+        
+        # Write video file with optimized settings
+        final_clip.write_videofile(
+            output_path,
+            codec='libx264',
+            audio_codec='aac',
+            verbose=False,
+            logger=None,
+            fps=15,
+            bitrate="1500k",
+            threads=4
+        )
+        
+        # Cleanup
+        self._cleanup_clips(clips + [final_clip], temp_files)
+        
+        st.success(f"✅ Synchronized video created: {os.path.basename(output_path)}")
+        return output_path
+
     def _loop_audio(self, audio_clip, target_duration):
         """Loop audio to match target duration"""
         from moviepy.audio.AudioClip import concatenate_audioclips
