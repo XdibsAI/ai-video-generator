@@ -4,6 +4,7 @@ import uuid
 import tempfile
 import streamlit as st
 from utils.compatibility import sanitize_filename
+from utils.text_processor import text_processor
 
 # Compatibility fix for Pillow >=10
 if not hasattr(Image, 'ANTIALIAS'):
@@ -27,13 +28,13 @@ class VideoEditor:
                     subtitle_text="", font_size=60, text_color='white', 
                     text_position='middle', font_name='Arial-Bold',
                     background_music=None, music_volume=0.3):
-        """Create video with REAL karaoke effect - ONE WORD AT A TIME"""
+        """Create video dengan PUNCTUATION-AWARE karaoke effect"""
         
         try:
             if not MOVIEPY_AVAILABLE:
                 return self._create_fallback_video(media_files, audio_path, duration, video_format)
             
-            st.info("🎬 Starting video creation with REAL karaoke effect...")
+            st.info("🎬 Starting video creation with PUNCTUATION-AWARE karaoke...")
             
             # Video settings
             if video_format == 'short':
@@ -99,11 +100,11 @@ class VideoEditor:
                 except Exception as e:
                     st.warning(f"⚠️ Could not add audio: {str(e)}")
             
-            # Add REAL karaoke subtitles - ONE WORD AT A TIME
+            # Add PUNCTUATION-AWARE karaoke subtitles
             if subtitle_text:
                 try:
-                    final_clip = self._add_real_karaoke_subtitle(final_clip, subtitle_text, font_size, text_color, text_position, audio_duration)
-                    st.success("✅ Karaoke subtitles added (one word at a time)")
+                    final_clip = self._add_punctuation_aware_karaoke(final_clip, subtitle_text, font_size, text_color, text_position, audio_duration)
+                    st.success("✅ Punctuation-aware karaoke added!")
                 except Exception as e:
                     st.warning(f"⚠️ Could not add karaoke: {str(e)}")
                     # Fallback to normal subtitle
@@ -128,7 +129,7 @@ class VideoEditor:
             output_filename = f"video_{uuid.uuid4().hex[:8]}.mp4"
             output_path = os.path.join(self.temp_dir, sanitize_filename(output_filename))
             
-            st.info("📤 Exporting video with karaoke...")
+            st.info("📤 Exporting video with punctuation-aware karaoke...")
             
             # Write video file with optimized settings
             final_clip.write_videofile(
@@ -145,7 +146,7 @@ class VideoEditor:
             # Cleanup
             self._cleanup_clips(clips + [final_clip], temp_files)
             
-            st.success(f"✅ Video with REAL karaoke created: {os.path.basename(output_path)}")
+            st.success(f"✅ Video with punctuation-aware karaoke created: {os.path.basename(output_path)}")
             return output_path
             
         except Exception as e:
@@ -154,58 +155,60 @@ class VideoEditor:
             st.error(f"Detailed error: {traceback.format_exc()}")
             return self._create_fallback_video(media_files, audio_path, duration, video_format)
     
-    def _add_real_karaoke_subtitle(self, video_clip, text, font_size, text_color, text_position, audio_duration):
-        """Add REAL karaoke subtitle that shows ONE WORD AT A TIME"""
+    def _add_punctuation_aware_karaoke(self, video_clip, text, font_size, text_color, text_position, audio_duration):
+        """Add karaoke yang sync dengan punctuation di audio"""
         try:
-            st.info("🎤 Creating word-by-word karaoke effect...")
-            
-            # Split text into words
-            words = text.split()
-            if not words:
-                return video_clip
-            
-            # Calculate timing for each word (simple linear distribution)
-            total_words = len(words)
-            word_duration = audio_duration / total_words
+            st.info("🎤 Creating punctuation-aware karaoke...")
             
             # Calculate position - use UPPER position to avoid covering video content
             if text_position == 'middle':
-                position = ('center', video_clip.h * 0.3)  # 30% from top instead of center
+                position = ('center', video_clip.h * 0.3)  # 30% from top
             else:  # bottom
                 position = ('center', video_clip.h * 0.8)
             
             text_clips = []
             
-            # Create INDIVIDUAL text clips for EACH WORD
-            for i in range(total_words):
-                # Current text: ONLY the current word
-                current_word = words[i]
+            # Get punctuation-aware timings
+            timings = text_processor.create_punctuation_aware_karaoke(text, audio_duration)
+            
+            # Display timing info untuk debugging
+            st.info(f"📊 Karaoke segments: {len(timings)}")
+            
+            for i, timing in enumerate(timings):
+                chunk_text = timing['text']
+                start_time = timing['start_time']
+                end_time = timing['end_time']
+                has_punctuation = timing['has_punctuation']
+                punctuation = timing['punctuation']
                 
-                # Timing for this word
-                start_time = i * word_duration
-                end_time = min((i + 1) * word_duration, audio_duration)
-                
-                # Ensure minimum duration
-                if end_time - start_time < 0.1:
-                    end_time = start_time + 0.1
-                
-                # Create text clip for THIS WORD ONLY
+                # Create text clip untuk chunk ini
                 try:
+                    # Different styling untuk punctuation
+                    stroke_width = 4 if has_punctuation else 2
+                    font_color = text_color
+                    
+                    # Highlight punctuation dengan warna berbeda
+                    if has_punctuation and punctuation in ['.', '!', '?']:
+                        font_color = '#FFD700'  # Gold untuk sentence endings
+                    
                     txt_clip = TextClip(
-                        current_word,  # Hanya satu kata!
+                        chunk_text,
                         fontsize=font_size,
-                        color=text_color,
+                        color=font_color,
                         font='Arial-Bold',
                         stroke_color='black',
-                        stroke_width=3,  # Thicker stroke for better visibility
-                        size=(video_clip.w * 0.8, None),  # Limit width
+                        stroke_width=stroke_width,
+                        size=(video_clip.w * 0.9, None),
                         method='caption'
                     ).set_position(position).set_start(start_time).set_duration(end_time - start_time)
                     
                     text_clips.append(txt_clip)
                     
+                    # Debug info
+                    # st.write(f"'{chunk_text}' | {start_time:.1f}s-{end_time:.1f}s | Pause: {timing['pause_duration']:.1f}s")
+                    
                 except Exception as e:
-                    st.warning(f"⚠️ Error creating text clip for word '{words[i]}': {str(e)}")
+                    st.warning(f"⚠️ Error creating text for '{chunk_text}': {str(e)}")
                     continue
             
             if not text_clips:
@@ -213,15 +216,15 @@ class VideoEditor:
                 return self._add_normal_subtitle(video_clip, text, font_size, text_color, text_position)
             
             # Composite all text clips with video
-            st.info(f"🔄 Compositing {len(text_clips)} individual word clips...")
+            st.info(f"🔄 Compositing {len(text_clips)} punctuation-aware segments...")
             result = CompositeVideoClip([video_clip] + text_clips)
             
             return result
             
         except Exception as e:
-            st.error(f"❌ Karaoke subtitle error: {str(e)}")
+            st.error(f"❌ Punctuation-aware karaoke error: {str(e)}")
             raise e
-    
+
     def _add_normal_subtitle(self, video_clip, text, font_size, text_color, text_position):
         """Add normal static subtitle as fallback"""
         try:
@@ -232,25 +235,8 @@ class VideoEditor:
                 position = ('center', video_clip.h * 0.85)
             
             # Split text into manageable lines
-            words = text.split()
-            lines = []
-            current_line = []
-            current_length = 0
-            
-            for word in words:
-                current_line.append(word)
-                current_length += len(word) + 1
-                
-                if current_length > 25:  # Fewer characters per line for better readability
-                    lines.append(' '.join(current_line))
-                    current_line = []
-                    current_length = 0
-            
-            if current_line:
-                lines.append(' '.join(current_line))
-            
-            # Take first 2-3 lines max
-            display_text = '\n'.join(lines[:3])
+            optimized_lines = text_processor.optimize_for_display(text, max_line_length=25)
+            display_text = '\n'.join(optimized_lines[:3])  # Max 3 lines
             
             # Create text clip
             txt_clip = TextClip(
@@ -273,7 +259,7 @@ class VideoEditor:
         except Exception as e:
             st.warning(f"⚠️ Normal subtitle error: {str(e)}")
             return video_clip
-    
+
     def _cleanup_clips(self, clips, temp_files):
         """Clean up clips and temporary files"""
         for clip in clips:
