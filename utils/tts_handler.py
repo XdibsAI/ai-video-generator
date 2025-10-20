@@ -23,7 +23,26 @@ class TTSHandler:
             'it': 'it', 'tr': 'tr', 'pl': 'pl', 'nl': 'nl'
         }
         
+        # Average reading speed (words per minute)
+        self.reading_speed = {
+            'id': 160,  # Indonesian
+            'en': 150,  # English
+            'es': 160,  # Spanish
+            'fr': 155,  # French
+            'de': 150,  # German
+            'ja': 140,  # Japanese
+            'ko': 145,  # Korean
+            'zh': 140   # Chinese
+        }
+        
         logger.info("TTS Handler initialized - Using gTTS only")
+
+    def estimate_audio_duration(self, text, language='id'):
+        """Estimate audio duration based on text length and language"""
+        words = len(text.split())
+        wpm = self.reading_speed.get(language, 150)
+        duration_minutes = words / wpm
+        return max(1.0, duration_minutes * 60)  # Minimum 1 second
 
     async def generate_tts(self, text, language='id', voice=None, rate='+0%'):
         """Generate TTS menggunakan gTTS saja - lebih reliable"""
@@ -53,20 +72,37 @@ class TTSHandler:
             # Optimize text length untuk gTTS
             optimized_text = self._optimize_text_for_tts(text)
             
+            # Estimate duration sebelum generate
+            estimated_duration = self.estimate_audio_duration(optimized_text, language)
+            st.info(f"⏱️ Estimated audio duration: {estimated_duration:.1f}s")
+            
             # Show progress
             with st.spinner(f"🔊 Generating audio ({len(optimized_text.split())} words)..."):
-                # Generate dengan gTTS - TANPA timeout parameter
+                # Generate dengan gTTS
                 tts = gTTS(
                     text=optimized_text, 
                     lang=gtts_lang, 
                     slow=False
-                    # timeout parameter removed - tidak supported oleh gTTS
                 )
                 tts.save(filepath)
             
             # Verify the file
             if os.path.exists(filepath) and os.path.getsize(filepath) > 2000:
-                st.success("✅ Audio generated successfully")
+                # Get actual duration
+                try:
+                    import subprocess
+                    result = subprocess.run([
+                        'ffprobe', '-v', 'error', '-show_entries', 
+                        'format=duration', '-of', 
+                        'default=noprint_wrappers=1:nokey=1', filepath
+                    ], capture_output=True, text=True, timeout=10)
+                    
+                    actual_duration = float(result.stdout.strip()) if result.stdout else estimated_duration
+                    st.success(f"✅ Audio generated ({actual_duration:.1f}s)")
+                    
+                except:
+                    st.success("✅ Audio generated successfully")
+                    
                 logger.info(f"TTS generated: {os.path.getsize(filepath)} bytes")
                 return filepath
             else:
@@ -92,9 +128,9 @@ class TTSHandler:
         text = text.strip()
         
         # Limit length untuk stability
-        if len(text) > 1000:  # Reduced from 1500 untuk lebih aman
+        if len(text) > 1000:
             words = text.split()
-            if len(words) > 80:  # Reduced dari 120
+            if len(words) > 80:
                 text = ' '.join(words[:80]) + "..."
                 st.info(f"📝 Text optimized: {len(words)} → 80 words")
             else:
@@ -120,8 +156,8 @@ class TTSHandler:
                 from pydub import AudioSegment
                 from pydub.generators import Sine
                 
-                duration = min(len(text.split()) * 0.3, 6)  # 0.3s per word, max 6s
-                audio = Sine(523.25).to_audio_segment(duration=duration * 1000)  # C5 note
+                duration = min(len(text.split()) * 0.3, 6)
+                audio = Sine(523.25).to_audio_segment(duration=duration * 1000)
                 audio = audio.fade_in(200).fade_out(500)
                 audio.export(filepath, format="mp3", bitrate="128k")
                 
@@ -199,10 +235,11 @@ def generate_tts_sync(text, language='id', voice=None, rate='+0%', engine='auto'
     
     # Show text info
     word_count = len(text.split())
-    st.info(f"📝 Generating audio for {word_count} words...")
+    estimated_duration = tts_handler.estimate_audio_duration(text, language)
+    st.info(f"📝 Generating audio for {word_count} words (~{estimated_duration:.1f}s)")
     
     try:
-        # Always use gTTS - Edge TTS disabled due to 403 errors
+        # Always use gTTS
         result = asyncio.run(tts_handler.generate_tts_gtts(text, language))
         
         if result and os.path.exists(result):
@@ -216,6 +253,10 @@ def generate_tts_sync(text, language='id', voice=None, rate='+0%', engine='auto'
     except Exception as e:
         st.error(f"❌ TTS Error: {str(e)}")
         return None
+
+def estimate_audio_duration(text, language='id'):
+    """Estimate audio duration for the given text"""
+    return tts_handler.estimate_audio_duration(text, language)
 
 def get_tts_info():
     """Get TTS system information"""
@@ -242,7 +283,7 @@ def start_cleanup_thread():
                 tts_handler.cleanup_old_files()
             except Exception as e:
                 logger.error(f"Cleanup thread error: {e}")
-            time.sleep(3600)  # Run every hour
+            time.sleep(3600)
     
     thread = threading.Thread(target=cleanup_worker, daemon=True)
     thread.start()

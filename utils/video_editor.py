@@ -28,13 +28,13 @@ class VideoEditor:
                     subtitle_text="", font_size=60, text_color='white', 
                     text_position='middle', font_name='Arial-Bold',
                     background_music=None, music_volume=0.3):
-        """Create video dengan PUNCTUATION-AWARE karaoke effect"""
+        """Create video dengan proper audio-video synchronization"""
         
         try:
             if not MOVIEPY_AVAILABLE:
                 return self._create_fallback_video(media_files, audio_path, duration, video_format)
             
-            st.info("🎬 Starting video creation with PUNCTUATION-AWARE karaoke...")
+            st.info("🎬 Starting video creation with audio synchronization...")
             
             # Video settings
             if video_format == 'short':
@@ -82,28 +82,69 @@ class VideoEditor:
             else:
                 final_clip = concatenate_videoclips(clips, method="compose")
             
-            # Adjust duration
-            if final_clip.duration > duration:
-                final_clip = final_clip.subclip(0, duration)
-            elif final_clip.duration < duration:
-                final_clip = self._loop_clip(final_clip, duration)
+            # Get actual audio duration
+            audio_duration = 0
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    audio_clip_test = AudioFileClip(audio_path)
+                    audio_duration = audio_clip_test.duration
+                    audio_clip_test.close()
+                    st.info(f"🎵 Audio duration: {audio_duration:.1f}s / Video target: {duration}s")
+                except Exception as e:
+                    st.warning(f"⚠️ Could not read audio duration: {str(e)}")
+                    audio_duration = duration
+            
+            # Adjust video duration based on audio
+            if audio_duration > 0:
+                # Use the shorter duration between audio and target
+                actual_duration = min(audio_duration, duration)
+                
+                if final_clip.duration > actual_duration:
+                    final_clip = final_clip.subclip(0, actual_duration)
+                elif final_clip.duration < actual_duration:
+                    final_clip = self._loop_clip(final_clip, actual_duration)
+                
+                st.info(f"📊 Using synchronized duration: {actual_duration:.1f}s")
+            else:
+                # No audio, use target duration
+                if final_clip.duration > duration:
+                    final_clip = final_clip.subclip(0, duration)
+                elif final_clip.duration < duration:
+                    final_clip = self._loop_clip(final_clip, duration)
             
             # Add audio if available
-            audio_duration = duration
+            final_audio_duration = final_clip.duration
             if audio_path and os.path.exists(audio_path):
                 try:
                     audio_clip = AudioFileClip(audio_path)
-                    audio_duration = min(audio_clip.duration, duration)
-                    audio_clip = audio_clip.subclip(0, audio_duration)
+                    
+                    # Match audio duration to video duration
+                    if audio_clip.duration > final_audio_duration:
+                        # Audio too long - trim it
+                        audio_clip = audio_clip.subclip(0, final_audio_duration)
+                        st.info("✂️ Audio trimmed to match video duration")
+                    elif audio_clip.duration < final_audio_duration:
+                        # Audio too short - loop it
+                        audio_clip = self._loop_audio(audio_clip, final_audio_duration)
+                        st.info("🔁 Audio looped to match video duration")
+                    
                     final_clip = final_clip.set_audio(audio_clip)
-                    st.success("✅ Audio added to video")
+                    st.success("✅ Audio synchronized with video")
+                    
                 except Exception as e:
                     st.warning(f"⚠️ Could not add audio: {str(e)}")
+                    final_audio_duration = final_clip.duration
+            else:
+                final_audio_duration = final_clip.duration
             
             # Add PUNCTUATION-AWARE karaoke subtitles
             if subtitle_text:
                 try:
-                    final_clip = self._add_punctuation_aware_karaoke(final_clip, subtitle_text, font_size, text_color, text_position, audio_duration)
+                    # Use actual audio duration for karaoke timing
+                    final_clip = self._add_punctuation_aware_karaoke(
+                        final_clip, subtitle_text, font_size, text_color, 
+                        text_position, final_audio_duration
+                    )
                     st.success("✅ Punctuation-aware karaoke added!")
                 except Exception as e:
                     st.warning(f"⚠️ Could not add karaoke: {str(e)}")
@@ -114,6 +155,8 @@ class VideoEditor:
             if background_music and os.path.exists(background_music):
                 try:
                     bg_music_clip = AudioFileClip(background_music).volumex(music_volume)
+                    bg_music_clip = bg_music_clip.subclip(0, final_audio_duration)
+                    
                     if final_clip.audio:
                         # Combine narration with background music
                         from moviepy.audio.AudioClip import CompositeAudioClip
@@ -129,7 +172,7 @@ class VideoEditor:
             output_filename = f"video_{uuid.uuid4().hex[:8]}.mp4"
             output_path = os.path.join(self.temp_dir, sanitize_filename(output_filename))
             
-            st.info("📤 Exporting video with punctuation-aware karaoke...")
+            st.info("📤 Exporting synchronized video...")
             
             # Write video file with optimized settings
             final_clip.write_videofile(
@@ -146,7 +189,7 @@ class VideoEditor:
             # Cleanup
             self._cleanup_clips(clips + [final_clip], temp_files)
             
-            st.success(f"✅ Video with punctuation-aware karaoke created: {os.path.basename(output_path)}")
+            st.success(f"✅ Synchronized video created: {os.path.basename(output_path)}")
             return output_path
             
         except Exception as e:
@@ -155,6 +198,15 @@ class VideoEditor:
             st.error(f"Detailed error: {traceback.format_exc()}")
             return self._create_fallback_video(media_files, audio_path, duration, video_format)
     
+    def _loop_audio(self, audio_clip, target_duration):
+        """Loop audio to match target duration"""
+        from moviepy.audio.AudioClip import concatenate_audioclips
+        
+        loops_needed = int(target_duration / audio_clip.duration) + 1
+        clips = [audio_clip] * loops_needed
+        looped_audio = concatenate_audioclips(clips)
+        return looped_audio.subclip(0, target_duration)
+
     def _add_punctuation_aware_karaoke(self, video_clip, text, font_size, text_color, text_position, audio_duration):
         """Add karaoke yang sync dengan punctuation di audio"""
         try:
@@ -172,7 +224,7 @@ class VideoEditor:
             timings = text_processor.create_punctuation_aware_karaoke(text, audio_duration)
             
             # Display timing info untuk debugging
-            st.info(f"📊 Karaoke segments: {len(timings)}")
+            st.info(f"📊 Karaoke segments: {len(timings)} | Audio duration: {audio_duration:.1f}s")
             
             for i, timing in enumerate(timings):
                 chunk_text = timing['text']
@@ -180,6 +232,12 @@ class VideoEditor:
                 end_time = timing['end_time']
                 has_punctuation = timing['has_punctuation']
                 punctuation = timing['punctuation']
+                
+                # Ensure timing doesn't exceed audio duration
+                if start_time >= audio_duration:
+                    break
+                    
+                end_time = min(end_time, audio_duration)
                 
                 # Create text clip untuk chunk ini
                 try:
@@ -204,9 +262,6 @@ class VideoEditor:
                     
                     text_clips.append(txt_clip)
                     
-                    # Debug info
-                    # st.write(f"'{chunk_text}' | {start_time:.1f}s-{end_time:.1f}s | Pause: {timing['pause_duration']:.1f}s")
-                    
                 except Exception as e:
                     st.warning(f"⚠️ Error creating text for '{chunk_text}': {str(e)}")
                     continue
@@ -216,7 +271,7 @@ class VideoEditor:
                 return self._add_normal_subtitle(video_clip, text, font_size, text_color, text_position)
             
             # Composite all text clips with video
-            st.info(f"🔄 Compositing {len(text_clips)} punctuation-aware segments...")
+            st.info(f"🔄 Compositing {len(text_clips)} synchronized segments...")
             result = CompositeVideoClip([video_clip] + text_clips)
             
             return result

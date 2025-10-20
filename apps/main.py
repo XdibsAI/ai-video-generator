@@ -3,6 +3,8 @@ import os
 import sys
 import json
 from datetime import datetime
+import uuid
+import subprocess
 
 # ✅ SET PAGE_CONFIG PALING AWAL
 st.set_page_config(
@@ -17,47 +19,57 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 
+# ✅ DEFINE CHECK_FFMPEG SEBELUM IMPORT LAINNYA
+def check_ffmpeg():
+    """Check if FFmpeg is available"""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], 
+                              capture_output=True, text=True, timeout=5)
+        return result.returncode == 0
+    except:
+        return False
+
+def setup_ffmpeg_warning():
+    """Display FFmpeg warning"""
+    st.warning("⚠️ FFmpeg not available - video processing limited")
+
+# ✅ IMPORT DENGAN FALLBACK HANDLING
+MOVIEPY_AVAILABLE = False
+TTS_AVAILABLE = False
+
+try:
+    # Try to import main dependencies
+    from gtts import gTTS
+    TTS_AVAILABLE = True
+except ImportError:
+    st.error("❌ gTTS not available - audio features disabled")
+
+try:
+    from moviepy.editor import VideoFileClip, ImageClip
+    MOVIEPY_AVAILABLE = True
+except ImportError:
+    st.warning("⚠️ MoviePy not available - video features limited")
+
 try:
     from config.settings import *
     from utils.story_generator import story_generator
-    from utils.tts_handler import generate_tts_sync
-    from utils.video_editor import video_editor, MOVIEPY_AVAILABLE
+    from utils.tts_handler import generate_tts_sync, estimate_audio_duration
+    from utils.video_editor import video_editor
     from utils.content_optimizer import content_optimizer
     from utils.cleanup import cleanup_manager
-    from utils.compatibility import check_ffmpeg, estimate_word_count
+    from utils.compatibility import estimate_word_count
+    from utils.session_manager import setup_persistent_session, show_session_info
+    from utils.text_processor import text_processor
     
-    print("✅ All imports successful!")
+    # ✅ AUTO LOAD API KEY
+    if OPENROUTER_API_KEY:
+        story_generator.api_key = OPENROUTER_API_KEY
+        st.sidebar.success("✅ API Key Loaded")
+    else:
+        st.sidebar.warning("⚠️ API Key not configured")
+        
 except ImportError as e:
     st.error(f"❌ Import Error: {e}")
-    # Fallback functions jika import gagal
-    def check_ffmpeg():
-        st.error("❌ FFmpeg check tidak tersedia")
-        return False
-    
-    def estimate_word_count(duration_seconds):
-        return (50, 100)
-
-# ✅ CEK .ENV FILE DAN LOAD API KEY
-def load_api_key():
-    """Load API key dari .env file dengan debugging"""
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        
-        api_key = os.getenv('OPENROUTER_API_KEY')
-        print(f"🔑 API Key dari .env: {api_key[:10]}..." if api_key and api_key != "your_actual_openrouter_api_key_here" else "❌ API Key tidak valid")
-        
-        if api_key and api_key != "your_actual_openrouter_api_key_here":
-            story_generator.api_key = api_key
-            return True
-        else:
-            return False
-    except Exception as e:
-        print(f"❌ Error loading API key: {e}")
-        return False
-
-# ✅ LOAD API KEY SAAT APLIKASI DIMULAI
-api_key_loaded = load_api_key()
 
 # Custom CSS
 st.markdown("""
@@ -93,20 +105,12 @@ st.markdown("""
         border-radius: 0.5rem;
         margin: 1rem 0;
     }
-    .api-status {
-        padding: 0.5rem;
+    .warning-box {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
         border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    .api-success {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-    }
-    .api-error {
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
+        padding: 1rem;
+        margin: 1rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -116,74 +120,78 @@ class VideoGeneratorApp:
         self.setup_session_state()
     
     def setup_session_state(self):
-        """Initialize session state variables"""
-        if 'initialized' not in st.session_state:
-            st.session_state.initialized = True
-            st.session_state.story_generated = False
-            st.session_state.story_options = []
-            st.session_state.selected_story_index = 0
-            st.session_state.story_text = ""
-            st.session_state.audio_path = None
-            st.session_state.video_path = None
-            st.session_state.uploaded_files = []
-            st.session_state.optimized_content = None
-            st.session_state.selected_color = "#FFFFFF"
-            st.session_state.background_music = None
-    
+        """Initialize session state dengan persistent management"""
+        # Initialize default values
+        defaults = {
+            'initialized': True,
+            'story_generated': False,
+            'story_options': [],
+            'selected_story_index': 0,
+            'story_text': "",
+            'audio_path': None,
+            'video_path': None,
+            'uploaded_files': [],
+            'optimized_content': None,
+            'selected_color': "#FFFFFF",
+            'background_music': None,
+            'background_music_path': None
+        }
+        
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+        
+        # Try to setup persistent session
+        try:
+            from utils.session_manager import setup_persistent_session
+            setup_persistent_session()
+        except:
+            pass
+
     def render_sidebar(self):
-        """Render sidebar dengan informasi karaoke"""
+        """Render sidebar dengan system info"""
         with st.sidebar:
             st.title("⚙️ Pengaturan Video")
             
-            # ✅ STATUS API KEY - DENGAN DEBUG INFO
-            st.subheader("🔑 Status API")
+            # ✅ SYSTEM STATUS
+            st.subheader("🔧 System Status")
             
-            # Cek status API key
-            api_key = getattr(story_generator, 'api_key', None)
-            has_valid_api = api_key and api_key != "your_actual_openrouter_api_key_here"
-            
-            if has_valid_api:
-                st.markdown('<div class="api-status api-success">✅ API Key Ready</div>', unsafe_allow_html=True)
-                st.info(f"Model: {getattr(story_generator, 'model', 'x-ai/grok-4-fast')}")
+            # FFmpeg Status
+            if check_ffmpeg():
+                st.success("✅ FFmpeg Ready")
             else:
-                st.markdown('<div class="api-status api-error">❌ API Key Missing</div>', unsafe_allow_html=True)
-                st.markdown("""
-                **Setup API Key:**
-                1. Edit file `.env` di root project
-                2. Tambahkan line: `OPENROUTER_API_KEY=your_actual_api_key_here`
-                3. Restart aplikasi
-                
-                **Dapatkan API Key:**
-                - Kunjungi [OpenRouter](https://openrouter.ai/keys)
-                - Buat account dan generate API key
-                - Copy key ke file `.env`
-                """)
-                
-                # Debug info
-                with st.expander("🔧 Debug Info"):
-                    st.write(f"API Key loaded: {api_key_loaded}")
-                    st.write(f"Story Generator API Key: {api_key}")
-                    try:
-                        from dotenv import load_dotenv
-                        load_dotenv()
-                        env_key = os.getenv('OPENROUTER_API_KEY')
-                        st.write(f".env API Key: {env_key}")
-                        st.write(f".env file exists: {os.path.exists('.env')}")
-                    except Exception as e:
-                        st.write(f"Debug error: {e}")
+                st.error("❌ FFmpeg Missing")
+                st.info("Run: sudo apt install ffmpeg")
             
-            # ✅ STATUS MOVIEPY & KARAOKE
-            st.subheader("🎬 Status Video")
+            # MoviePy Status
             if MOVIEPY_AVAILABLE:
-                st.success("✅ Video Processing Ready")
-                st.markdown("""
-                **🎤 Fitur Karaoke:**
-                - Teks muncul kata demi kata
-                - Sync dengan audio narration
-                - Efek typewriter real-time
-                """)
+                st.success("✅ MoviePy Ready")
             else:
-                st.error("❌ Video Processing Limited")
+                st.error("❌ MoviePy Missing")
+                st.info("Run: pip install moviepy")
+            
+            # TTS Status
+            if TTS_AVAILABLE:
+                st.success("✅ TTS Ready")
+            else:
+                st.error("❌ TTS Missing") 
+                st.info("Run: pip install gtts")
+            
+            # API Status
+            try:
+                if hasattr(story_generator, 'api_key') and story_generator.api_key:
+                    st.success("✅ API Key Ready")
+                else:
+                    st.error("❌ API Key Missing")
+            except:
+                st.error("❌ API System Error")
+            
+            # Session Info
+            try:
+                from utils.session_manager import show_session_info
+                show_session_info()
+            except:
+                pass
             
             st.subheader("📝 Konten Settings")
             
@@ -237,8 +245,15 @@ class VideoGeneratorApp:
             )
             
             if background_music:
-                st.session_state.background_music = background_music
+                # Save to temporary file
+                import tempfile
+                bg_music_path = os.path.join(tempfile.gettempdir(), f"bg_music_{uuid.uuid4().hex[:8]}_{background_music.name}")
+                with open(bg_music_path, 'wb') as f:
+                    f.write(background_music.getvalue())
+                st.session_state.background_music_path = bg_music_path
                 st.success(f"✅ {background_music.name} uploaded")
+            else:
+                st.session_state.background_music_path = None
             
             music_volume = st.slider("🔊 Volume Musik", 0.0, 1.0, 0.3, 0.1, key="volume_slider")
             
@@ -255,7 +270,7 @@ class VideoGeneratorApp:
                 'font_size': font_size, 'text_color': text_color, 
                 'user_description': user_description, 'music_volume': music_volume
             }
-    
+
     def render_file_upload(self):
         """Render file upload section"""
         st.header("📁 Upload Media")
@@ -272,18 +287,19 @@ class VideoGeneratorApp:
             st.success(f"✅ {len(uploaded_files)} file berhasil diupload")
             st.session_state.uploaded_files = uploaded_files
             
+            # Show preview
+            cols = st.columns(3)
             for i, file in enumerate(uploaded_files):
-                col1, col2 = st.columns([1, 4])
-                with col1:
+                col = cols[i % 3]
+                with col:
                     if file.type.startswith('image'):
-                        st.image(file, width=80)
+                        st.image(file, use_column_width=True, caption=file.name)
                     else:
                         st.video(file)
-                with col2:
-                    st.write(f"**{file.name}** ({file.type})")
-    
+                    st.caption(f"{file.name} ({file.type})")
+
     def render_story_generator(self, settings):
-        """Render story generation section dengan 3 options"""
+        """Render story generation section"""
         st.header("📖 Generate Cerita (3 Pilihan)")
         
         col1, col2 = st.columns([3, 1])
@@ -296,23 +312,11 @@ class VideoGeneratorApp:
         
         with col2:
             word_range = estimate_word_count(settings['duration'])
-            st.info(f"**Target:**\n{word_range[0]}-{word_range[1]} kata")
+            st.info(f"**Target:** {word_range[0]}-{word_range[1]} kata")
         
         if generate_clicked:
-            # Cek API key sebelum generate
-            api_key = getattr(story_generator, 'api_key', None)
-            has_valid_api = api_key and api_key != "your_actual_openrouter_api_key_here"
-            
-            if not has_valid_api:
-                st.error("""
-                ❌ API Key belum dikonfigurasi. 
-                
-                **Langkah perbaikan:**
-                1. Edit file `.env` di folder project
-                2. Tambahkan: `OPENROUTER_API_KEY=your_actual_api_key_here`
-                3. Restart aplikasi
-                4. Pastikan API key valid dari [OpenRouter](https://openrouter.ai/keys)
-                """)
+            if not hasattr(story_generator, 'api_key') or not story_generator.api_key:
+                st.error("❌ API Key belum dikonfigurasi. Silakan setup di config/settings.py")
                 return
             
             with st.spinner("🤖 AI sedang membuat 3 pilihan cerita..."):
@@ -366,6 +370,7 @@ class VideoGeneratorApp:
                             if st.session_state.selected_story_index != i:
                                 st.session_state.selected_story_index = i
                                 st.session_state.story_text = st.session_state.story_options[i]
+                                st.rerun()
                                 break
             
             st.subheader("✏️ Edit Cerita yang Dipilih")
@@ -387,27 +392,41 @@ class VideoGeneratorApp:
                         st.success("✅ Perubahan disimpan!")
             
             word_count = len(st.session_state.story_text.split())
-            st.caption(f"📊 **{word_count} kata** (Estimasi audio: {word_count/2.5:.1f}s)")
-    
+            try:
+                estimated_duration = estimate_audio_duration(st.session_state.story_text, settings['language'])
+                st.caption(f"📊 **{word_count} kata** (Estimasi audio: {estimated_duration:.1f}s)")
+            except:
+                st.caption(f"📊 **{word_count} kata**")
+
     def render_video_generator(self, settings):
-        """Render video generation section dengan info karaoke"""
+        """Render video generation section"""
         st.header("🎬 Generate Video")
         
+        # System capability check
+        if not TTS_AVAILABLE:
+            st.error("❌ TTS tidak tersedia. Install: pip install gtts")
+            return
+            
+        if not MOVIEPY_AVAILABLE:
+            st.error("❌ Video processing tidak tersedia. Install: pip install moviepy")
+            return
+            
+        if not check_ffmpeg():
+            st.error("❌ FFmpeg tidak tersedia. Install: sudo apt install ffmpeg")
+            return
+        
         # ✅ INFO KARAOKE
-        if MOVIEPY_AVAILABLE:
-            st.markdown("""
-            <div class="karaoke-info">
-            <h4>🎤 Fitur Karaoke Aktif</h4>
-            <p>Teks akan muncul <strong>kata demi kata</strong> sesuai timing audio narration!</p>
-            <ul>
-                <li>✅ Sync sempurna dengan suara</li>
-                <li>✅ Efek typewriter real-time</li>
-                <li>✅ Posisi teks dapat disesuaikan</li>
-            </ul>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.warning("🎬 Mode Terbatas: MoviePy tidak tersedia.")
+        st.markdown("""
+        <div class="karaoke-info">
+        <h4>🎤 Fitur Karaoke Aktif</h4>
+        <p>Teks akan muncul <strong>kata demi kata</strong> sesuai timing audio narration!</p>
+        <ul>
+            <li>✅ Sync sempurna dengan suara</li>
+            <li>✅ Efek typewriter real-time</li>
+            <li>✅ Posisi teks dapat disesuaikan</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
         
         if not st.session_state.story_generated:
             st.warning("⚠️ Silakan generate cerita terlebih dahulu")
@@ -427,15 +446,6 @@ class VideoGeneratorApp:
             status_text = st.empty()
             
             try:
-                # Save background music if uploaded
-                bg_music_path = None
-                if st.session_state.background_music:
-                    import tempfile
-                    bg_music = st.session_state.background_music
-                    bg_music_path = os.path.join(tempfile.gettempdir(), f"bg_music_{uuid.uuid4().hex[:8]}_{bg_music.name}")
-                    with open(bg_music_path, 'wb') as f:
-                        f.write(bg_music.getvalue())
-                
                 status_text.text("🔊 Step 1: Generating audio narration...")
                 audio_path = generate_tts_sync(st.session_state.story_text, settings['language'])
                 progress_bar.progress(33)
@@ -456,7 +466,7 @@ class VideoGeneratorApp:
                     font_size=settings['font_size'],
                     text_color=settings['text_color'],
                     text_position=settings['text_position'],
-                    background_music=bg_music_path,
+                    background_music=st.session_state.background_music_path,
                     music_volume=settings['music_volume']
                 )
                 progress_bar.progress(66)
@@ -468,11 +478,21 @@ class VideoGeneratorApp:
                 st.session_state.video_path = video_path
                 
                 status_text.text("📊 Step 3: Optimizing content...")
-                st.session_state.optimized_content = content_optimizer.optimize_content(
-                    st.session_state.story_text,
-                    settings['niche'],
-                    settings['language']
-                )
+                try:
+                    st.session_state.optimized_content = content_optimizer.optimize_content(
+                        st.session_state.story_text,
+                        settings['niche'],
+                        settings['language']
+                    )
+                except:
+                    st.session_state.optimized_content = {
+                        'title': 'Generated Video',
+                        'description': st.session_state.story_text[:100] + '...',
+                        'hooks': ['Watch this amazing video!'],
+                        'hashtags': ['video', 'content'],
+                        'optimal_posting_times': []
+                    }
+                
                 progress_bar.progress(100)
                 status_text.text("✅ Video dengan karaoke berhasil di-generate!")
                 
@@ -480,10 +500,12 @@ class VideoGeneratorApp:
                 
             except Exception as e:
                 st.error(f"❌ Error generating video: {str(e)}")
+                import traceback
+                st.error(f"Detailed error: {traceback.format_exc()}")
                 progress_bar.progress(0)
-    
+
     def render_results(self):
-        """Render results section dengan video preview"""
+        """Render results section"""
         if not st.session_state.get('video_path'):
             return
         
@@ -496,54 +518,49 @@ class VideoGeneratorApp:
             
             if os.path.exists(st.session_state.video_path):
                 try:
-                    video_file = open(st.session_state.video_path, 'rb')
-                    video_bytes = video_file.read()
+                    with open(st.session_state.video_path, 'rb') as video_file:
+                        video_bytes = video_file.read()
                     st.video(video_bytes)
                     st.success("🎬 Video dengan karaoke berhasil dibuat!")
                     st.info("🎤 **Fitur Karaoke:** Teks muncul kata demi kata sync dengan audio")
-                except Exception as e:
-                    st.error(f"❌ Error loading video preview: {e}")
-                    st.info(f"Video file: {os.path.basename(st.session_state.video_path)}")
-            
-            if os.path.exists(st.session_state.video_path):
-                try:
-                    with open(st.session_state.video_path, "rb") as f:
-                        video_bytes = f.read()
                     
+                    # Download button for video
                     st.download_button(
                         label="📥 Download Video MP4",
                         data=video_bytes,
-                        file_name=f"video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
+                        file_name=f"video_karaoke_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
                         mime="video/mp4",
                         use_container_width=True,
                         key="download_video_btn"
                     )
                 except Exception as e:
-                    st.error(f"Error loading video: {e}")
+                    st.error(f"❌ Error loading video preview: {e}")
+            else:
+                st.error("❌ Video file not found")
         
         with col2:
             st.subheader("📄 Download Assets")
             
-            if st.session_state.story_text and st.session_state.optimized_content:
+            # Content assets download
+            if st.session_state.story_text:
                 combined_content = f"""VIDEO CONTENT ASSETS
 
 CERITA NARASI:
 {st.session_state.story_text}
 
-OPTIMASI KONTEN:
-Judul: {st.session_state.optimized_content['title']}
+"""
+                if st.session_state.optimized_content:
+                    combined_content += f"""OPTIMASI KONTEN:
+Judul: {st.session_state.optimized_content.get('title', 'Generated Video')}
 
 Deskripsi:
-{st.session_state.optimized_content['description']}
+{st.session_state.optimized_content.get('description', 'No description')}
 
 Video Hooks:
-{chr(10).join([f"{i+1}. {hook}" for i, hook in enumerate(st.session_state.optimized_content['hooks'])])}
+{chr(10).join([f"{i+1}. {hook}" for i, hook in enumerate(st.session_state.optimized_content.get('hooks', []))])}
 
 Hashtags:
-{' '.join([f'#{tag}' for tag in st.session_state.optimized_content['hashtags']])}
-
-Waktu Upload Optimal:
-{chr(10).join([f"- {slot['day']}: {slot['time_slot']} ({slot['recommendation']})" for slot in st.session_state.optimized_content['optimal_posting_times'][:3]])}
+{' '.join([f'#{tag}' for tag in st.session_state.optimized_content.get('hashtags', [])])}
 
 Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 """
@@ -566,43 +583,13 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
                         label="🔊 Download Audio Narasi",
                         data=audio_bytes,
                         file_name=f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3",
-                        mime="audio/mp3",
+                        mime="audio/mpeg",
                         use_container_width=True,
                         key="download_audio_btn"
                     )
                 except Exception as e:
                     st.warning(f"Audio tidak tersedia: {e}")
-        
-        if st.session_state.optimized_content:
-            self.render_optimized_content()
-    
-    def render_optimized_content(self):
-        """Render optimized content suggestions"""
-        st.header("📈 Optimasi Konten")
-        
-        content = st.session_state.optimized_content
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("🎯 Judul Video")
-            st.write(content["title"])
-            
-            st.subheader("📝 Deskripsi")
-            st.text_area("Deskripsi Video", 
-                        value=content["description"], 
-                        height=150,
-                        key="desc_output_final")
-        
-        with col2:
-            st.subheader("🎣 Video Hooks")
-            for i, hook in enumerate(content["hooks"], 1):
-                st.write(f"{i}. {hook}")
-            
-            st.subheader("🏷️ Hashtags")
-            hashtags = " ".join([f"#{tag}" for tag in content["hashtags"]])
-            st.code(hashtags)
-    
+
     def render_header(self):
         """Render application header"""
         st.markdown('<h1 class="main-header">🎬 AI Video Generator</h1>', unsafe_allow_html=True)
@@ -614,28 +601,30 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         </div>
         """, unsafe_allow_html=True)
         
-        # Status indicators
+        # System status overview
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.info(f"📁 Media: {len(st.session_state.uploaded_files)}")
+            ffmpeg_status = "✅" if check_ffmpeg() else "❌"
+           st.info(f"🎥 FFmpeg: {ffmpeg_status}")
         with col2:
-            story_status = "📖 Cerita: ✅" if st.session_state.story_generated else "📖 Cerita: ⏳"
-            st.info(story_status)
+            moviepy_status = "✅" if MOVIEPY_AVAILABLE else "❌"
+            st.info(f"🎬 MoviePy: {moviepy_status}")
         with col3:
-            video_status = "🎬 Video: ✅" if st.session_state.video_path else "🎬 Video: ⏳"
-            st.info(video_status)
+            tts_status = "✅" if TTS_AVAILABLE else "❌"
+            st.info(f"🔊 TTS: {tts_status}")
         with col4:
-            api_key = getattr(story_generator, 'api_key', None)
-            has_valid_api = api_key and api_key != "your_actual_openrouter_api_key_here"
-            ai_status = "🤖 AI: ✅" if has_valid_api else "🤖 AI: ❌"
-            st.info(ai_status)
-    
+            try:
+                api_status = "✅" if hasattr(story_generator, 'api_key') and story_generator.api_key else "❌"
+                st.info(f"🤖 API: {api_status}")
+            except:
+                st.info(f"🤖 API: ❌")
+
     def run(self):
         """Main application runner"""
         
+        # Check system dependencies
         if not check_ffmpeg():
-            st.error("❌ FFmpeg tidak terinstall. Install dengan: `sudo apt install ffmpeg`")
-            return
+            setup_ffmpeg_warning()
         
         self.render_header()
         settings = self.render_sidebar()
@@ -651,73 +640,6 @@ Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         with tab4:
             self.render_results()
 
-import uuid
-
 if __name__ == "__main__":
     app = VideoGeneratorApp()
     app.run()
-
-# Tambahkan import di bagian atas
-from utils.session_manager import setup_persistent_session, save_current_session, clear_current_session, show_session_info
-
-class VideoGeneratorApp:
-    def __init__(self):
-        self.setup_session_state()
-    
-    def setup_session_state(self):
-        """Initialize session state dengan persistent management"""
-        setup_persistent_session()  # ✅ Ini yang penting!
-        
-        # Default values jika belum ada di session state
-        defaults = {
-            'initialized': True,
-            'story_generated': False,
-            'story_options': [],
-            'selected_story_index': 0,
-            'story_text': "",
-            'audio_path': None,
-            'video_path': None,
-            'uploaded_files': [],
-            'optimized_content': None,
-            'selected_color': "#FFFFFF",
-            'background_music': None,
-            'background_music_path': None
-        }
-        
-        for key, value in defaults.items():
-            if key not in st.session_state:
-                st.session_state[key] = value
-
-    def render_sidebar(self):
-        """Render sidebar dengan session info"""
-        with st.sidebar:
-            st.title("⚙️ Pengaturan Video")
-            
-            # ✅ TAMBAHKAN SESSION INFO DI SIDEBAR
-            show_session_info()
-            
-            # ... rest of your existing sidebar code ...
-
-    def render_story_generator(self, settings):
-        """Render story generation section dengan auto-save"""
-        # ... existing code ...
-        
-        if generate_clicked:
-            # ... existing story generation code ...
-            
-            # ✅ AUTO-SAVE SETELAH GENERATE CERITA
-            setup_persistent_session()
-            
-        # ... rest of method ...
-
-    def render_video_generator(self, settings):
-        """Render video generation dengan auto-save"""
-        # ... existing code ...
-        
-        if generate_video_clicked:
-            # ... existing video generation code ...
-            
-            # ✅ AUTO-SAVE SETELAH BUAT VIDEO
-            setup_persistent_session()
-            
-        # ... rest of method ...
