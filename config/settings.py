@@ -1,78 +1,42 @@
 import os
+import streamlit as st
 from dotenv import load_dotenv
 
+# Load environment variables dari .env file
 load_dotenv()
 
-# API Configuration
-OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
-OPENROUTER_BASE_URL = os.getenv('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')
-DEFAULT_MODEL = os.getenv('DEFAULT_MODEL', 'x-ai/grok-4-fast')
+# Try to get API key from environment variable (for Streamlit Cloud)
+OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY', '')
 
-# App Configuration
-MAX_VIDEO_DURATION = int(os.getenv('MAX_VIDEO_DURATION', 180))
-TEMP_FILE_TIMEOUT = int(os.getenv('TEMP_FILE_TIMEOUT', 3600))
-PORT = 8505
+# If not in environment, try to get from Streamlit secrets
+try:
+    if not OPENROUTER_API_KEY:
+        OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
+except:
+    pass
 
-# ✅ PERBAIKAN PATH: Update BASE_DIR untuk struktur baru
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATIC_DIR = os.path.join(BASE_DIR, 'apps', 'static')
-AUDIO_DIR = os.path.join(STATIC_DIR, 'assets', 'audio')
-VIDEO_DIR = os.path.join(STATIC_DIR, 'assets', 'video')
-OUTPUT_DIR = os.path.join(STATIC_DIR, 'assets', 'output')
-TEMP_DIR = os.path.join(STATIC_DIR, 'assets', 'temp')
+# Fallback to empty string if still not found
+if not OPENROUTER_API_KEY:
+    OPENROUTER_API_KEY = ""
 
-# Create directories if they don't exist
-for directory in [AUDIO_DIR, VIDEO_DIR, OUTPUT_DIR, TEMP_DIR]:
-    os.makedirs(directory, exist_ok=True)
+# Application Settings
+APP_NAME = "AI Video Generator"
+APP_VERSION = "2.0.0"
+MAX_VIDEO_DURATION = 300  # 5 minutes
+SUPPORTED_LANGUAGES = ['id', 'en', 'es', 'fr', 'de', 'ja', 'ko', 'zh']
 
-# Video Configuration
-VIDEO_SETTINGS = {
-    'short': {'width': 1080, 'height': 1920, 'aspect_ratio': '9:16'},
-    'long': {'width': 1920, 'height': 1080, 'aspect_ratio': '16:9'}
-}
+# TTS Settings
+TTS_ENGINE = "gtts"
 
-# Narration Settings
-NICHE_OPTIONS = [
-    "Fakta Menarik", "Motivasi", "Humor", "Petualangan", 
-    "Pendidikan", "Teknologi", "Sejarah", "Sains", "Bisnis"
-]
+# Video Settings
+DEFAULT_VIDEO_FORMAT = "short"
+DEFAULT_FONT_SIZE = 60
+DEFAULT_TEXT_COLOR = "#FFFFFF"
 
-LANGUAGE_OPTIONS = [
-    {"code": "id", "name": "Indonesia"},
-    {"code": "en", "name": "English"},
-    {"code": "es", "name": "Spanish"},
-    {"code": "fr", "name": "French"}
-]
+# Debug mode
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
-DURATION_OPTIONS = [
-    {"seconds": 30, "label": "30 Detik", "word_range": (50, 80)},
-    {"seconds": 60, "label": "1 Menit", "word_range": (100, 150)},
-    {"seconds": 180, "label": "3 Menit", "word_range": (300, 400)}
-]
-
-STYLE_OPTIONS = ["Serius", "Lucu", "Inspiratif", "Dramatis", "Informal"]
-
-# Font Settings
-FONT_OPTIONS = [
-    {"name": "Arial", "file": "arial.ttf"},
-    {"name": "Roboto", "file": "Roboto-Regular.ttf"},
-    {"name": "Montserrat", "file": "Montserrat-Regular.ttf"},
-    {"name": "Open Sans", "file": "OpenSans-Regular.ttf"}
-]
-
-# ✅ PERBAIKAN: Color options dengan nama dan preview
-COLOR_OPTIONS = [
-    {"name": "Putih", "value": "#FFFFFF", "preview": "⚪"},
-    {"name": "Emas", "value": "#FFD700", "preview": "🟡"}, 
-    {"name": "Hijau Terang", "value": "#00FF00", "preview": "🟢"},
-    {"name": "Merah Oranye", "value": "#FF4500", "preview": "🔴"},
-    {"name": "Biru Dodger", "value": "#1E90FF", "preview": "🔵"},
-    {"name": "Merah Muda", "value": "#FF69B4", "preview": "🌸"},
-    {"name": "Hijau Lime", "value": "#32CD32", "preview": "💚"},
-    {"name": "Oranye", "value": "#FFA500", "preview": "🟠"}
-]
-
-TEXT_POSITIONS = [
-    {"value": "middle", "label": "Tengah"},
-    {"value": "bottom", "label": "Bawah"}
-]
+# Print debug info
+if DEBUG:
+    print(f"API Key loaded: {'Yes' if OPENROUTER_API_KEY else 'No'}")
+    print(f"API Key length: {len(OPENROUTER_API_KEY)}")
