@@ -1,3 +1,5 @@
+# Update settings.py dengan model Grok-4-Fast
+cat > config/settings.py << 'SETTINGSEOF'
 import os
 import streamlit as st
 from dotenv import load_dotenv
@@ -61,3 +63,6 @@ def estimate_word_count(duration_seconds):
         words_per_second = 2.5
         estimated_words = int(duration_seconds * words_per_second)
         return (estimated_words - 20, estimated_words + 20)
+SETTINGSEOF
+
+echo "✅ Model telah diupdate ke Grok-4-Fast"

@@ -1,3 +1,10 @@
+#!/bin/bash
+
+# Backup file saat ini
+cp utils/story_generator.py utils/story_generator.py.backup_error
+
+# Buat file story_generator.py yang clean
+cat > utils/story_generator.py << 'STORYEOF'
 import requests
 import json
 import time
@@ -250,3 +257,6 @@ From history to modern discoveries, {niche} continues to prove that our world is
 
 # Singleton instance
 story_generator = StoryGenerator()
+STORYEOF
+
+echo "✅ story_generator.py telah dikembalikan ke versi clean"

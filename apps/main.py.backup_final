@@ -57,11 +57,11 @@ try:
     from utils.video_editor import video_editor
     from utils.content_optimizer import content_optimizer
     from utils.cleanup import cleanup_manager
-    # # from utils.compatibility import estimate_word_count  # ❌ Removed due to import issues
+    from utils.compatibility import estimate_word_count  # ✅ FIX: Import yang benar
     from utils.session_manager import setup_persistent_session, show_session_info
     from utils.text_processor import text_processor
     from utils.speech_to_text import speech_to_text
-    # from utils.text_effects import text_effects  # ❌ Commented out
+    from utils.text_effects import text_effects
     
     # ✅ AUTO LOAD API KEY
     if OPENROUTER_API_KEY:
@@ -125,20 +125,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
-# ✅ FALLBACK TEXT_EFFECTS
-class FallbackTextEffects:
-    def render_effects_gallery(self, selected_effect, sample_text, font_size):
-        st.info("🎨 Preview Efek Teks")
-        st.write(f"Teks: {sample_text}")
-        st.write(f"Ukuran Font: {font_size}px")
-        st.write("Efek: Standar")
-    
-    def get_effect_display_info(self, effect_name):
-        return "Efek Standar", "Teks akan ditampilkan dengan efek standar"
-
-# Initialize fallback
-text_effects = FallbackTextEffects()
+# ✅ FALLBACK FUNCTION untuk estimate_word_count
+def estimate_word_count(duration_seconds):
+    """
+    Estimate word count based on duration in seconds
+    Fallback function if import from utils.compatibility fails
+    """
+    if duration_seconds == 30:
+        return (50, 80)
+    elif duration_seconds == 60:
+        return (100, 150)
+    elif duration_seconds == 90:
+        return (150, 200)
+    else:
+        words_per_second = 2.5
+        estimated_words = int(duration_seconds * words_per_second)
+        return (estimated_words - 20, estimated_words + 20)
 
 class VideoGeneratorApp:
     def __init__(self):

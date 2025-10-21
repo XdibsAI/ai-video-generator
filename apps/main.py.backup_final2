@@ -57,7 +57,7 @@ try:
     from utils.video_editor import video_editor
     from utils.content_optimizer import content_optimizer
     from utils.cleanup import cleanup_manager
-    # # from utils.compatibility import estimate_word_count  # ❌ Removed due to import issues
+    # from utils.compatibility import estimate_word_count  # ❌ Commented out due to import issues  # ✅ FIX: Import yang benar
     from utils.session_manager import setup_persistent_session, show_session_info
     from utils.text_processor import text_processor
     from utils.speech_to_text import speech_to_text

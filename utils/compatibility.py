@@ -85,16 +85,20 @@ def get_temp_directory():
     os.makedirs(temp_dir, exist_ok=True)
     return temp_dir
 
+
 def estimate_word_count(duration_seconds):
     """
-    Estimate word count based on video duration
-    Average reading speed: 150 words per minute
+    Estimate word count based on duration in seconds
+    Consistent with story_generator implementation
     """
-    words_per_minute = 150
-    estimated_words = int((duration_seconds / 60) * words_per_minute)
-    
-    # Return range (min, max)
-    min_words = max(10, int(estimated_words * 0.7))
-    max_words = int(estimated_words * 1.3)
-    
-    return (min_words, max_words)
+    if duration_seconds == 30:
+        return (50, 80)
+    elif duration_seconds == 60:
+        return (100, 150)
+    elif duration_seconds == 90:
+        return (150, 200)
+    else:
+        words_per_second = 2.5
+        estimated_words = int(duration_seconds * words_per_second)
+        return (estimated_words - 20, estimated_words + 20)
+
