@@ -6,22 +6,20 @@ from config.settings import OPENROUTER_API_KEY, OPENROUTER_BASE_URL, DEFAULT_MOD
 
 class StoryGenerator:
     def __init__(self):
-        self.api_key = None
+        self.api_key = OPENROUTER_API_KEY
         self.base_url = OPENROUTER_BASE_URL
         self.model = DEFAULT_MODEL
 
     def generate_stories(self, niche, duration_seconds, style, language, user_description=""):
         """Generate 3 story options using OpenRouter API - OPTIMIZED"""
-
         # Cache key untuk menghindari generate berulang
         cache_key = f"{niche}_{duration_seconds}_{language}_{user_description}"
-
         # Cek cache dulu
         if hasattr(st.session_state, 'story_cache') and cache_key in st.session_state.story_cache:
             st.info("🔄 Menggunakan cerita dari cache...")
             return st.session_state.story_cache[cache_key]
 
-        # ✅ GUNAKAN API JIKA API KEY ADA
+        # GUNAKAN API JIKA API KEY ADA
         if self.api_key and self.api_key != "your_actual_openrouter_api_key_here":
             stories = self._generate_multiple_with_api(niche, duration_seconds, style, language, user_description)
         else:
@@ -112,7 +110,6 @@ class StoryGenerator:
 
     def _build_multi_prompt(self, niche, target_words, style, language, user_description):
         """Build prompt for generating multiple stories"""
-
         language_names = {
             "id": "Bahasa Indonesia",
             "en": "English"
@@ -233,7 +230,7 @@ From history to modern discoveries, {niche} continues to prove that our world is
         }
 
         lang_stories = stories.get(language, stories["id"])
-        return lang_stories.get(niche, "Narasi akan muncul di sini setelah di-generate.")
+        return lang_stories.get(style, "Narasi akan muncul di sini setelah di-generate.")
 
     def _estimate_word_count(self, duration_seconds):
         """Estimate word count based on duration"""
@@ -250,3 +247,12 @@ From history to modern discoveries, {niche} continues to prove that our world is
 
 # Singleton instance
 story_generator = StoryGenerator()
+
+def generate_story_sync(niche, duration_seconds, style, language, user_description=""):
+    """Synchronous wrapper for generating a single story"""
+    try:
+        stories = story_generator.generate_stories(niche, duration_seconds, style, language, user_description)
+        return stories[0] if stories else None
+    except Exception as e:
+        st.error(f"❌ Error generating story: {str(e)}")
+        return None

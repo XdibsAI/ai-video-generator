@@ -1,0 +1,1284 @@
+import streamlit as st
+import os
+import sys
+import json
+from datetime import datetime
+import uuid
+import subprocess
+
+# ✅ SET PAGE_CONFIG PALING AWAL
+st.set_page_config(
+    page_title="AI Video Generator",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ✅ IMPORT SETELAH PAGE_CONFIG
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.insert(0, project_root)
+
+# ✅ DEFINE CHECK_FFMPEG SEBELUM IMPORT LAINNYA
+def check_ffmpeg():
+    """Check if FFmpeg is available"""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], 
+                              capture_output=True, text=True, timeout=5)
+        return result.returncode == 0
+    except:
+        return False
+
+def setup_ffmpeg_warning():
+    """Display FFmpeg warning"""
+    st.warning("⚠️ FFmpeg not available - video processing limited")
+
+# ✅ IMPORT DENGAN FALLBACK HANDLING
+MOVIEPY_AVAILABLE = False
+TTS_AVAILABLE = False
+
+try:
+    # Try to import main dependencies
+    from gtts import gTTS
+    TTS_AVAILABLE = True
+except ImportError:
+    st.error("❌ gTTS not available - audio features disabled")
+
+try:
+    from moviepy.editor import VideoFileClip, ImageClip
+    MOVIEPY_AVAILABLE = True
+except ImportError:
+    st.warning("⚠️ MoviePy not available - video features limited")
+
+try:
+    from config.settings import *
+    from utils.story_generator import story_generator
+    from utils.tts_handler import generate_tts_sync, estimate_audio_duration
+    from utils.video_editor import video_editor
+    from utils.content_optimizer import content_optimizer
+    from utils.cleanup import cleanup_manager
+    from utils.compatibility import estimate_word_count  # ✅ FIX: Import yang benar
+    from utils.session_manager import setup_persistent_session, show_session_info
+    from utils.text_processor import text_processor
+    from utils.speech_to_text import speech_to_text
+    from utils.text_effects import text_effects
+    
+    # ✅ AUTO LOAD API KEY
+    if OPENROUTER_API_KEY:
+        story_generator.api_key = OPENROUTER_API_KEY
+        st.sidebar.success("✅ API Key Loaded")
+    else:
+        st.sidebar.warning("⚠️ API Key not configured")
+        
+except ImportError as e:
+    st.error(f"❌ Import Error: {e}")
+
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 3rem;
+        background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .story-option {
+        padding: 1rem;
+        border: 2px solid #e0e0e0;
+        border-radius: 0.5rem;
+        margin: 0.5rem 0;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    .story-option:hover {
+        border-color: #4ECDC4;
+        background-color: #f8ffff;
+    }
+    .story-option.selected {
+        border-color: #FF6B6B;
+        background-color: #fff0f0;
+    }
+    .karaoke-info {
+        background: linear-gradient(45deg, #667eea, #764ba2);
+        color: white;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
+    .warning-box {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    .effect-preview {
+        border: 2px solid #e0e0e0;
+        border-radius: 10px;
+        padding: 20px;
+        margin: 10px;
+        text-align: center;
+        background: #f9f9f9;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+class VideoGeneratorApp:
+    def __init__(self):
+        self.setup_session_state()
+    
+    def setup_session_state(self):
+        """Initialize session state dengan persistent management"""
+        # Initialize default values
+        defaults = {
+            'initialized': True,
+            'story_generated': False,
+            'story_options': [],
+            'selected_story_index': 0,
+            'story_text': "",
+            'audio_path': None,
+            'video_path': None,
+            'uploaded_files': [],
+            'optimized_content': None,
+            'selected_color': "#FFFFFF",
+            'background_music': None,
+            'background_music_path': None,
+            'selected_text_effect': 'none',
+            'video_mode': 'video'
+        }
+        
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
+        
+        # Try to setup persistent session
+        try:
+            from utils.session_manager import setup_persistent_session
+            setup_persistent_session()
+        except:
+            pass
+
+        def render_text_effects_section(self):
+        """Render text effects selection dengan preview yang visual"""
+        self.ensure_session_state()
+        
+        st.subheader("🎨 Efek Teks Karaoke")
+        
+        # Effect selection dengan preview visual
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.write("**Pilih Efek Teks:**")
+            
+            effect_options = [
+                ('none', '⚪ Tanpa Efek', 'Teks standar tanpa efek khusus'),
+                ('typewriter', '⌨️ Typewriter', 'Teks muncul seperti diketik'),
+                ('highlight', '🟡 Highlight', 'Kata aktif disorot kuning'),
+                ('glow', '✨ Glow', 'Teks bersinar dengan efek glow'),
+                ('neon', '💡 Neon', 'Efek neon seperti papan reklame'),
+                ('shadow', '👤 Shadow', 'Teks dengan bayangan'),
+                ('gradient', '🌈 Gradient', 'Teks dengan gradien warna')
+            ]
+            
+            selected_effect = st.radio(
+                "Pilih efek:",
+                options=[opt[0] for opt in effect_options],
+                format_func=lambda x: next((opt[1] for opt in effect_options if opt[0] == x), x),
+                key="effect_selection_radio"
+            )
+            
+            # Update session state
+            self.safe_session_set('selected_text_effect', selected_effect)
+            
+            # Effect description
+            effect_desc = next((opt[2] for opt in effect_options if opt[0] == selected_effect), "")
+            st.info(f"**Deskripsi:** {effect_desc}")
+        
+        with col2:
+            st.write("**Preview Efek:**")
+            
+            # Custom preview area dengan styling
+            preview_style = """
+            <style>
+            .preview-container {
+                border: 2px solid #e0e0e0;
+                border-radius: 10px;
+                padding: 20px;
+                margin: 10px 0;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 150px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+            }
+            .preview-text {
+                font-family: 'Arial Black', sans-serif;
+                margin: 0;
+            """
+            
+            # Effect-specific styles
+            effect_styles = {
+                'none': """
+                .preview-text {
+                    color: white;
+                    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+                }
+                """,
+                'typewriter': """
+                .preview-text {
+                    color: white;
+                    background: linear-gradient(45deg, #ff6b6b, #feca57);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    border-right: 3px solid white;
+                    animation: blink 1s infinite;
+                }
+                @keyframes blink {
+                    0%, 50% { border-color: white; }
+                    51%, 100% { border-color: transparent; }
+                }
+                """,
+                'highlight': """
+                .preview-text {
+                    color: white;
+                    background: linear-gradient(45deg, #ffd93d, #ff6b6b);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    font-weight: bold;
+                }
+                .highlight-word {
+                    background: yellow;
+                    color: black;
+                    padding: 2px 5px;
+                    border-radius: 3px;
+                }
+                """,
+                'glow': """
+                .preview-text {
+                    color: white;
+                    text-shadow: 
+                        0 0 5px #fff,
+                        0 0 10px #fff,
+                        0 0 15px #ff6b6b,
+                        0 0 20px #ff6b6b,
+                        0 0 25px #ff6b6b;
+                    animation: glow 2s ease-in-out infinite alternate;
+                }
+                @keyframes glow {
+                    from { text-shadow: 0 0 5px #fff, 0 0 10px #fff, 0 0 15px #ff6b6b, 0 0 20px #ff6b6b; }
+                    to { text-shadow: 0 0 10px #fff, 0 0 15px #ff6b6b, 0 0 20px #ff6b6b, 0 0 25px #ff6b6b; }
+                }
+                """,
+                'neon': """
+                .preview-text {
+                    color: #00ffff;
+                    text-shadow: 
+                        0 0 5px #00ffff,
+                        0 0 10px #00ffff,
+                        0 0 15px #00ffff,
+                        0 0 20px #00ffff;
+                    font-weight: bold;
+                    animation: neon 1.5s ease-in-out infinite alternate;
+                }
+                @keyframes neon {
+                    from { opacity: 0.8; }
+                    to { opacity: 1; }
+                }
+                """,
+                'shadow': """
+                .preview-text {
+                    color: white;
+                    text-shadow: 
+                        3px 3px 0 #000,
+                        6px 6px 0 rgba(0,0,0,0.2);
+                    font-weight: bold;
+                }
+                """,
+                'gradient': """
+                .preview-text {
+                    background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1, #96ceb4);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    background-size: 300% 300%;
+                    animation: gradient 3s ease infinite;
+                    font-weight: bold;
+                }
+                @keyframes gradient {
+                    0% { background-position: 0% 50%; }
+                    50% { background-position: 100% 50%; }
+                    100% { background-position: 0% 50%; }
+                }
+                """
+            }
+            
+            # Apply selected effect style
+            preview_style += effect_styles.get(selected_effect, effect_styles['none'])
+            preview_style += "</style>"
+            
+            # Preview text dengan efek yang dipilih
+            preview_text = "Preview Efek Teks"
+            if selected_effect == 'highlight':
+                preview_text = 'Preview <span class="highlight-word">Efek</span> Teks'
+            elif selected_effect == 'typewriter':
+                preview_text = "Preview Efek Teks|"
+            
+            preview_html = f"""
+            {preview_style}
+            <div class="preview-container">
+                <h2 class="preview-text">{preview_text}</h2>
+            </div>
+            """
+            
+            st.markdown(preview_html, unsafe_allow_html=True)
+            
+            # Font size control untuk preview
+            font_size = st.slider(
+                "Ukuran Font Preview:",
+                min_value=24,
+                max_value=72,
+                value=48,
+                key="preview_font_size"
+            )
+            
+            # Update preview dengan font size
+            st.markdown(f"""
+            <style>
+            .preview-text {{
+                font-size: {font_size}px !important;
+            }}
+            </style>
+            """, unsafe_allow_html=True)
+        
+        # Sample text input untuk testing efek
+        st.markdown("---")
+        st.write("**Custom Teks untuk Testing:**")
+        sample_text = st.text_input(
+            "Coba efek dengan teks custom:",
+            value="Teks Karaoke Demo",
+            key="effect_test_text"
+        )
+        
+        if sample_text and sample_text != "Teks Karaoke Demo":
+            # Update preview dengan custom text
+            st.markdown(f"""
+            <div class="preview-container">
+                <h2 class="preview-text">{sample_text}</h2>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        return selected_effect
+
+    
+    
+    def _render_video_mode_selection(self, settings):
+        """Render video mode selection section"""
+        st.subheader("🎯 Pilih Mode Video")
+        
+        # Determine available modes based on uploaded content
+        has_video_with_audio = self.safe_session_get('auto_subtitle_used')
+        has_other_media = self.safe_session_get('uploaded_files') or self.safe_session_get('other_media_files')
+        
+        mode_options = []
+        mode_descriptions = {}
+        
+        if has_video_with_audio:
+            mode_options.append('add_text_to_video')
+            mode_descriptions['add_text_to_video'] = "🎬 Tambah Teks ke Video Existing"
+        
+        if has_other_media or not has_video_with_audio:
+            mode_options.append('video')
+            mode_descriptions['video'] = "🎬 Video Baru dengan Media"
+        
+        mode_options.append('text_only')
+        mode_descriptions['text_only'] = "📝 Teks Karaoke Only"
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            video_mode = st.radio(
+                "Pilih jenis video:",
+                options=mode_options,
+                format_func=lambda x: mode_descriptions[x],
+                index=0,
+                key="video_mode_radio"
+            )
+            self.safe_session_set('video_mode', video_mode)
+        
+        with col2:
+            if video_mode == 'add_text_to_video':
+                st.success("**🎬 Mode: Tambah Teks ke Video Existing**")
+                st.info("""
+                - ✅ Gunakan video yang sudah diupload
+                - ✅ Teks karaoke sync dengan audio original  
+                - ✅ Hasil: Video sama + teks subtitle
+                - ✅ Perfect untuk video narasi yang butuh teks
+                """)
+            elif video_mode == 'video':
+                st.success("**🎬 Mode: Video Baru dengan Media**")
+                st.info("""
+                - ✅ Buat video baru dengan media yang diupload
+                - ✅ Teks karaoke dengan audio TTS
+                - ✅ Cocok untuk content baru
+                - ✅ Support gambar dan video background
+                """)
+            else:
+                st.success("**📝 Mode: Teks Karaoke Only**")
+                st.info("""
+                - ✅ Background hitam polos
+                - ✅ Fokus pada teks karaoke
+                - ✅ Cocok untuk lyric video atau quotes
+                - ✅ Lebih cepat render
+                """)
+        
+        # Karaoke info box
+        st.markdown("""
+        <div style="background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 1.5rem; border-radius: 10px; margin: 1rem 0;">
+        <h4 style="margin: 0 0 1rem 0;">🎤 Fitur Karaoke Aktif</h4>
+        <p style="margin: 0.5rem 0;"><strong>✨ Teks akan muncul kata demi kata sesuai timing audio!</strong></p>
+        <ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+            <li>✅ Sync sempurna dengan suara narasi</li>
+            <li>✅ Efek typewriter real-time</li>
+            <li>✅ Posisi teks dapat disesuaikan</li>
+            <li>✅ Multiple text effects available</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    def _render_video_generation_section(self, settings, selected_effect):
+        """Render video generation controls"""
+        st.subheader("🚀 Generate Video")
+        
+        # Content summary
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**📊 Konten Summary:**")
+            if self.safe_session_get('auto_subtitle_used'):
+                st.success("✅ **Sumber:** Auto-subtitle dari video")
+                word_count = len(self.safe_session_get('story_text', '').split())
+                st.info(f"**{word_count}** kata diekstrak dari audio")
+            else:
+                st.success("✅ **Sumber:** Cerita AI-generated")
+                word_count = len(self.safe_session_get('story_text', '').split())
+                st.info(f"**{word_count}** kata dalam cerita")
+        
+        with col2:
+            st.write("**⚙️ Settings:**")
+            st.caption(f"🎯 **Mode:** {self.safe_session_get('video_mode', 'video')}")
+            st.caption(f"🎨 **Efek:** {selected_effect}")
+            st.caption(f"⏱️ **Durasi:** {settings['duration']} detik")
+            st.caption(f"📐 **Format:** {settings['video_format']}")
+        
+        # Generate button
+        st.markdown("---")
+        
+        # Dynamic button text based on mode
+        button_texts = {
+            'add_text_to_video': "🚀 GENERATE - Tambah Teks ke Video",
+            'video': "🚀 GENERATE - Video Baru dengan Karaoke", 
+            'text_only': "🚀 GENERATE - Teks Karaoke Only"
+        }
+        
+        generate_clicked = st.button(
+            button_texts.get(self.safe_session_get('video_mode'), "🚀 GENERATE VIDEO"),
+            use_container_width=True,
+            type="primary",
+            key="generate_video_btn_main"
+        )
+        
+        if generate_clicked:
+            self._generate_video_process(settings, selected_effect)\n\n
+    
+    def _generate_video_process(self, settings, selected_effect):
+        """Handle video generation process"""
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Determine audio source
+            use_original_audio = self.safe_session_get('auto_subtitle_used', False)
+            
+            if use_original_audio and self.safe_session_get('uploaded_files'):
+                # Use audio from uploaded video (Auto-Subtitle mode)
+                status_text.text("🔊 Menggunakan audio original dari video...")
+                video_file = next((f for f in self.safe_session_get('uploaded_files') if hasattr(f, 'type') and f.type.startswith('video')), None)
+                
+                if video_file:
+                    # Extract audio from video
+                    import tempfile
+                    temp_video_path = os.path.join(tempfile.gettempdir(), f"temp_video_{uuid.uuid4().hex[:8]}_{video_file.name}")
+                    with open(temp_video_path, 'wb') as f:
+                        f.write(video_file.getvalue())
+                    
+                    from moviepy.editor import VideoFileClip
+                    video_clip = VideoFileClip(temp_video_path)
+                    audio_path = os.path.join(tempfile.gettempdir(), f"extracted_audio_{uuid.uuid4().hex[:8]}.mp3")
+                    video_clip.audio.write_audiofile(audio_path, verbose=False, logger=None)
+                    video_clip.close()
+                    
+                    st.success("✅ Audio original berhasil diekstrak")
+                else:
+                    st.error("❌ Video file tidak ditemukan")
+                    return
+            else:
+                # Generate TTS untuk cerita biasa
+                status_text.text("🔊 Generating audio narration...")
+                audio_path = generate_tts_sync(self.safe_session_get('story_text'), settings['language'])
+            
+            progress_bar.progress(33)
+            
+            if not audio_path:
+                st.error("❌ Gagal mendapatkan audio")
+                return
+            
+            self.safe_session_set('audio_path', audio_path)
+            
+            status_text.text("🎬 Step 2: Creating video dengan REAL karaoke...")
+            
+            # Video creation
+            video_path = video_editor.create_video(
+                media_files=self.safe_session_get('uploaded_files'),
+                audio_path=audio_path,
+                duration=settings['duration'],
+                video_format=settings['video_format'],
+                subtitle_text=self.safe_session_get('story_text'),
+                font_size=settings['font_size'],
+                text_color=settings['text_color'],
+                text_position=settings['text_position'],
+                background_music=self.safe_session_get('background_music_path'),
+                music_volume=settings['music_volume'],
+                mode=self.safe_session_get('video_mode'),
+                auto_subtitle=self.safe_session_get('auto_subtitle_used'),
+                subtitle_language=settings['language'],
+                text_effect=selected_effect,
+                use_original_video=(self.safe_session_get('video_mode') == 'add_text_to_video')
+            )
+            progress_bar.progress(66)
+            
+            if not video_path:
+                st.error("❌ Gagal generate video")
+                return
+            
+            self.safe_session_set('video_path', video_path)
+            
+            status_text.text("📊 Step 3: Optimizing content...")
+            try:
+                optimized_content = content_optimizer.optimize_content(
+                    self.safe_session_get('story_text'),
+                    settings['niche'],
+                    settings['language']
+                )
+                self.safe_session_set('optimized_content', optimized_content)
+            except:
+                self.safe_session_set('optimized_content', {
+                    'title': 'Generated Video',
+                    'description': self.safe_session_get('story_text')[:100] + '...',
+                    'hooks': ['Watch this amazing video!'],
+                    'hashtags': ['video', 'content'],
+                    'optimal_posting_times': []
+                })
+            
+            progress_bar.progress(100)
+            
+            mode_name = "Video dengan Media" if self.safe_session_get('video_mode') == 'video' else "Teks Karaoke Only"
+            if self.safe_session_get('video_mode') == 'add_text_to_video':
+                mode_name = "Tambah Teks ke Video Existing"
+            
+            subtitle_source = "auto dari video" if self.safe_session_get('auto_subtitle_used') else "teks AI"
+            status_text.text(f"✅ {mode_name} dengan {subtitle_source} berhasil di-generate!")
+            
+            st.balloons()
+            st.success("🎉 **Video berhasil dibuat!** Lihat hasil di tab '📊 Hasil'")
+            
+        except Exception as e:
+            st.error(f"❌ Error generating video: {str(e)}")
+            import traceback
+            st.error(f"Detailed error: {traceback.format_exc()}")
+            progress_bar.progress(0)\n\ndef render_sidebar(self):
+        """Render sidebar dengan system info"""
+        with st.sidebar:
+            st.title("⚙️ Pengaturan Video")
+            
+            # ✅ SYSTEM STATUS
+            st.subheader("🔧 System Status")
+            
+            # FFmpeg Status
+            if check_ffmpeg():
+                st.success("✅ FFmpeg Ready")
+            else:
+                st.error("❌ FFmpeg Missing")
+                st.info("Run: sudo apt install ffmpeg")
+            
+            # MoviePy Status
+            if MOVIEPY_AVAILABLE:
+                st.success("✅ MoviePy Ready")
+            else:
+                st.error("❌ MoviePy Missing")
+                st.info("Run: pip install moviepy")
+            
+            # TTS Status
+            if TTS_AVAILABLE:
+                st.success("✅ TTS Ready")
+            else:
+                st.error("❌ TTS Missing") 
+                st.info("Run: pip install gtts")
+            
+            # API Status
+            try:
+                if hasattr(story_generator, 'api_key') and story_generator.api_key:
+                    st.success("✅ API Key Ready")
+                else:
+                    st.error("❌ API Key Missing")
+            except:
+                st.error("❌ API System Error")
+            
+            # Session Info
+            try:
+                show_session_info()
+            except:
+                pass
+            
+            st.subheader("📝 Konten Settings")
+            
+            niche = st.selectbox("🎯 Tema Konten", 
+                               ["Fakta Menarik", "Motivasi", "Humor", "Petualangan", "Pendidikan"], 
+                               index=0, key="niche_select")
+            
+            language = st.selectbox("🌍 Bahasa", ["id", "en"], 
+                                  format_func=lambda x: "Indonesia" if x == "id" else "English", 
+                                  index=0, key="language_select")
+            
+            duration = st.selectbox("⏱️ Durasi Video", [30, 60, 90], 
+                                  format_func=lambda x: f"{x} detik", 
+                                  index=0, key="duration_select")
+            
+            video_format = st.radio("📐 Format Video", ["short", "long"], 
+                                  format_func=lambda x: "Short (9:16)" if x == "short" else "Long (16:9)", 
+                                  index=0, key="format_radio")
+            
+            st.subheader("✍️ Pengaturan Teks")
+            
+            text_position = st.radio("📍 Posisi Teks", ["middle", "bottom"], 
+                                   format_func=lambda x: "Tengah" if x == "middle" else "Bawah", 
+                                   index=0, key="position_radio")
+            
+            font_size = st.slider("📏 Ukuran Font", 40, 100, 60, 5, key="font_slider")
+            
+            # Color picker
+            text_color = st.selectbox(
+                "🎨 Warna Teks",
+                options=["#FFFFFF", "#FFD700", "#00FF00", "#FF4500", "#1E90FF", "#FF69B4"],
+                format_func=lambda x: {
+                    "#FFFFFF": "Putih ⚪",
+                    "#FFD700": "Emas 🟡",
+                    "#00FF00": "Hijau 🟢", 
+                    "#FF4500": "Merah 🔴",
+                    "#1E90FF": "Biru 🔵",
+                    "#FF69B4": "Pink 🌸"
+                }[x],
+                index=0,
+                key="color_select"
+            )
+            
+            # ✅ BACKGROUND MUSIC UPLOAD
+            st.subheader("🎵 Musik Latar")
+            background_music = st.file_uploader(
+                "Upload file audio (MP3/WAV)",
+                type=['mp3', 'wav'],
+                help="File audio untuk background music",
+                key="bg_music_uploader"
+            )
+            
+            if background_music:
+                # Save to temporary file
+                import tempfile
+                bg_music_path = os.path.join(tempfile.gettempdir(), f"bg_music_{uuid.uuid4().hex[:8]}_{background_music.name}")
+                with open(bg_music_path, 'wb') as f:
+                    f.write(background_music.getvalue())
+                st.session_state.background_music_path = bg_music_path
+                st.success(f"✅ {background_music.name} uploaded")
+            else:
+                st.session_state.background_music_path = None
+            
+            music_volume = st.slider("🔊 Volume Musik", 0.0, 1.0, 0.3, 0.1, key="volume_slider")
+            
+            user_description = st.text_area(
+                "📝 Deskripsi Tambahan (Opsional)",
+                placeholder="Jelaskan konten yang kamu inginkan...",
+                height=80,
+                key="desc_textarea"
+            )
+            
+            return {
+                'niche': niche, 'language': language, 'duration': duration, 
+                'video_format': video_format, 'text_position': text_position, 
+                'font_size': font_size, 'text_color': text_color, 
+                'user_description': user_description, 'music_volume': music_volume
+            }
+
+    def render_file_upload(self):
+        """Render file upload section dengan auto-subtitle feature"""
+        st.header("📁 Upload Media")
+        
+        # ✅ AUTO SUBTITLE SECTION
+        st.subheader("🎤 Auto Subtitle dari Video")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            video_for_subtitle = st.file_uploader(
+                "Upload video untuk extract teks otomatis",
+                type=['mp4', 'mov', 'avi'],
+                help="Upload video yang ada suara, kami akan extract teksnya otomatis",
+                key="subtitle_video_uploader"
+            )
+        
+        with col2:
+            subtitle_language = st.selectbox(
+                "Bahasa Video",
+                options=['id', 'en'],
+                format_func=lambda x: "Indonesia" if x == 'id' else "English",
+                key="subtitle_lang_select"
+            )
+        
+        if video_for_subtitle and st.button("🎤 Extract Teks dari Video", key="extract_subtitle_btn"):
+            with st.spinner("🔊 Menganalisis audio video..."):
+                transcribed_text = speech_to_text.transcribe_video(video_for_subtitle, subtitle_language)
+                
+                if transcribed_text:
+                    st.success("✅ Teks berhasil diekstrak dari video!")
+                    st.text_area("Teks yang diekstrak:", value=transcribed_text, height=150, key="extracted_text")
+                    
+                    # Auto-fill ke story text jika user mau
+                    if st.button("💾 Gunakan Teks Ini untuk Video", key="use_extracted_text"):
+                        st.session_state.story_text = transcribed_text
+                        st.session_state.story_generated = True
+                        st.success("✅ Teks sudah disimpan! Lanjut ke Generate Video.")
+                        st.rerun()
+                else:
+                    st.error("❌ Gagal mengekstrak teks dari video")
+        
+        st.markdown("---")
+        st.subheader("📁 Upload Media untuk Video")
+        
+        uploaded_files = st.file_uploader(
+            "Pilih gambar atau video untuk background",
+            type=['jpg', 'jpeg', 'png', 'mp4', 'mov', 'avi'],
+            accept_multiple_files=True,
+            help="Upload beberapa file untuk video yang lebih menarik",
+            key="file_uploader_main"
+        )
+        
+        if uploaded_files:
+            st.success(f"✅ {len(uploaded_files)} file berhasil diupload")
+            st.session_state.uploaded_files = uploaded_files
+            
+            # Show preview
+            cols = st.columns(3)
+            for i, file in enumerate(uploaded_files):
+                col = cols[i % 3]
+                with col:
+                    if file.type.startswith('image'):
+                        st.image(file, use_column_width=True, caption=file.name)
+                    else:
+                        st.video(file)
+                    st.caption(f"{file.name} ({file.type})")
+
+    def render_story_generator(self, settings):
+        """Render story generation section"""
+        st.header("📖 Generate Cerita (3 Pilihan)")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            generate_clicked = st.button("🎭 Generate 3 Cerita Options", 
+                                       use_container_width=True, 
+                                       type="primary",
+                                       key="generate_stories_btn")
+        
+        with col2:
+            # ✅ FIX: Gunakan estimate_word_count yang sudah diimport
+            word_range = estimate_word_count(settings['duration'])
+            st.info(f"**Target:** {word_range[0]}-{word_range[1]} kata")
+        
+        if generate_clicked:
+            if not hasattr(story_generator, 'api_key') or not story_generator.api_key:
+                st.error("❌ API Key belum dikonfigurasi. Silakan setup di config/settings.py")
+                return
+            
+            with st.spinner("🤖 AI sedang membuat 3 pilihan cerita..."):
+                try:
+                    story_options = story_generator.generate_stories(
+                        niche=settings['niche'],
+                        duration_seconds=settings['duration'],
+                        style="Serius",
+                        language=settings['language'],
+                        user_description=settings['user_description']
+                    )
+                    
+                    if story_options and len(story_options) >= 1:
+                        st.session_state.story_options = story_options
+                        st.session_state.selected_story_index = 0
+                        st.session_state.story_text = story_options[0]
+                        st.session_state.story_generated = True
+                        st.success("✅ 3 pilihan cerita berhasil di-generate!")
+                    else:
+                        st.error("❌ Gagal generate cerita")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        if st.session_state.story_generated and st.session_state.story_options:
+            st.subheader("🎯 Pilih Salah Satu Cerita")
+            
+            with st.form(key="story_selection_form"):
+                for i, story in enumerate(st.session_state.story_options):
+                    is_selected = (i == st.session_state.selected_story_index)
+                    
+                    col1, col2 = st.columns([1, 20])
+                    with col1:
+                        radio_val = st.radio(
+                            f"Pilih Opsi {i+1}",
+                            [f"opsi_{i}"],
+                            key=f"story_radio_{i}",
+                            label_visibility="collapsed",
+                            index=0 if is_selected else None
+                        )
+                    
+                    with col2:
+                        css_class = "story-option selected" if is_selected else "story-option"
+                        st.markdown(f'<div class="{css_class}">{story[:200]}...</div>', unsafe_allow_html=True)
+                
+                story_submitted = st.form_submit_button("✅ Pilih Cerita Ini")
+                
+                if story_submitted:
+                    for i in range(len(st.session_state.story_options)):
+                        if st.session_state.get(f"story_radio_{i}") == f"opsi_{i}":
+                            if st.session_state.selected_story_index != i:
+                                st.session_state.selected_story_index = i
+                                st.session_state.story_text = st.session_state.story_options[i]
+                                st.rerun()
+                                break
+            
+            st.subheader("✏️ Edit Cerita yang Dipilih")
+            
+            with st.form(key="story_edit_form"):
+                edited_story = st.text_area(
+                    "Edit cerita sesuai keinginanmu:",
+                    value=st.session_state.story_text,
+                    height=200,
+                    key="story_editor_main"
+                )
+                
+                save_clicked = st.form_submit_button("💾 Simpan Perubahan")
+                
+                if save_clicked:
+                    if edited_story != st.session_state.story_text:
+                        st.session_state.story_text = edited_story
+                        st.session_state.story_options[st.session_state.selected_story_index] = edited_story
+                        st.success("✅ Perubahan disimpan!")
+            
+            word_count = len(st.session_state.story_text.split())
+            try:
+                estimated_duration = estimate_audio_duration(st.session_state.story_text, settings['language'])
+                st.caption(f"📊 **{word_count} kata** (Estimasi audio: {estimated_duration:.1f}s)")
+            except:
+                st.caption(f"📊 **{word_count} kata**")
+
+        def render_video_generator(self, settings):
+        """Render video generation section dengan layout yang terorganisir"""
+        self.ensure_session_state()
+        
+        st.header("🎬 Generate Video")
+        
+        # System capability check dalam container yang rapi
+        with st.container():
+            st.subheader("🔧 System Check")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if TTS_AVAILABLE:
+                    st.success("✅ **TTS Ready**")
+                else:
+                    st.error("❌ **TTS Missing**")
+                    st.caption("pip install gtts")
+            
+            with col2:
+                if MOVIEPY_AVAILABLE:
+                    st.success("✅ **MoviePy Ready**")
+                else:
+                    st.error("❌ **MoviePy Missing**") 
+                    st.caption("pip install moviepy")
+            
+            with col3:
+                if check_ffmpeg():
+                    st.success("✅ **FFmpeg Ready**")
+                else:
+                    st.error("❌ **FFmpeg Missing**")
+                    st.caption("sudo apt install ffmpeg")
+        
+        # Check content availability
+        has_content = self.safe_session_get('story_generated') or self.safe_session_get('auto_subtitle_used')
+        
+        if not has_content:
+            st.error("""
+            ⚠️ **Belum ada konten untuk video!**
+            
+            Silakan pilih salah satu:
+            - 📁 **Tab Upload Media**: Upload video dengan audio untuk auto-subtitle
+            - 📖 **Tab Generate Cerita**: Buat cerita baru dengan AI
+            """)
+            return
+        
+        # Main content dalam tabs
+        tab1, tab2, tab3 = st.tabs(["🎨 Efek Teks", "🎯 Mode Video", "🚀 Generate"])
+        
+        with tab1:
+            selected_effect = self.render_text_effects_section()
+        
+        with tab2:
+            self._render_video_mode_selection(settings)
+        
+        with tab3:
+            self._render_video_generation_section(settings, selected_effect)
+            
+        if not MOVIEPY_AVAILABLE:
+            st.error("❌ Video processing tidak tersedia. Install: pip install moviepy")
+            return
+            
+        if not check_ffmpeg():
+            st.error("❌ FFmpeg tidak tersedia. Install: sudo apt install ffmpeg")
+            return
+        
+        # ✅ TEXT EFFECTS SECTION
+        st.subheader("🎨 Pilih Efek Teks")
+        selected_effect = self.render_text_effects_section()
+        
+        # ✅ AUTO SUBTITLE OPTION
+        has_video_upload = any(f.type.startswith('video') for f in st.session_state.uploaded_files) if st.session_state.uploaded_files else False
+        
+        if has_video_upload:
+            st.subheader("🎤 Opsi Subtitle Otomatis")
+            auto_subtitle = st.checkbox(
+                "Gunakan teks dari audio video yang diupload",
+                help="Extract teks otomatis dari audio video dan gunakan sebagai subtitle",
+                key="auto_subtitle_checkbox"
+            )
+            
+            if auto_subtitle:
+                st.info("ℹ️ Teks akan diekstrak dari audio video dan digunakan sebagai narasi")
+        else:
+            auto_subtitle = False
+        
+        # ✅ MODE SELECTION
+        st.subheader("🎯 Pilih Mode Video")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            video_mode = st.radio(
+                "Pilih jenis video:",
+                options=['video', 'text_only'],
+                format_func=lambda x: "🎬 Video dengan Media" if x == 'video' else "📝 Teks Karaoke Only",
+                index=0,
+                key="video_mode_radio"
+            )
+        
+        with col2:
+            if video_mode == 'video':
+                st.info("""
+                **🎬 Video dengan Media:**
+                - Gunakan gambar/video yang diupload
+                - Teks karaoke muncul di atas media
+                - Cocok untuk content yang visual
+                """)
+            else:
+                st.info("""
+                **📝 Teks Karaoke Only:**
+                - Background hitam polos
+                - Fokus pada teks karaoke
+                - Cocok untuk lyric video atau quotes
+                - Lebih cepat render
+                """)
+        
+        # Show appropriate requirements based on mode
+        if video_mode == 'video' and not st.session_state.uploaded_files:
+            st.warning("⚠️ Untuk mode Video, silakan upload file media terlebih dahulu")
+            return
+        
+        if not st.session_state.story_generated and not auto_subtitle:
+            st.warning("⚠️ Silakan generate cerita atau aktifkan auto-subtitle terlebih dahulu")
+            return
+        
+        # ✅ INFO KARAOKE
+        st.markdown("""
+        <div class="karaoke-info">
+        <h4>🎤 Fitur Karaoke Aktif</h4>
+        <p>Teks akan muncul <strong>kata demi kata</strong> sesuai timing audio narration!</p>
+        <ul>
+            <li>✅ Sync sempurna dengan suara</li>
+            <li>✅ Efek typewriter real-time</li>
+            <li>✅ Posisi teks dapat disesuaikan</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        generate_video_clicked = st.button("🚀 Generate Video dengan Karaoke", 
+                                         use_container_width=True, 
+                                         type="primary",
+                                         key="generate_video_btn")
+        
+        if generate_video_clicked:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            try:
+                # Determine audio source
+                if auto_subtitle and has_video_upload:
+                    # Use audio from uploaded video
+                    status_text.text("🔊 Using audio from uploaded video...")
+                    video_file = next(f for f in st.session_state.uploaded_files if f.type.startswith('video'))
+                    
+                    # Extract audio from video
+                    import tempfile
+                    temp_video_path = os.path.join(tempfile.gettempdir(), f"temp_video_{uuid.uuid4().hex[:8]}_{video_file.name}")
+                    with open(temp_video_path, 'wb') as f:
+                        f.write(video_file.getvalue())
+                    
+                    from moviepy.editor import VideoFileClip
+                    video_clip = VideoFileClip(temp_video_path)
+                    audio_path = os.path.join(tempfile.gettempdir(), f"extracted_audio_{uuid.uuid4().hex[:8]}.mp3")
+                    video_clip.audio.write_audiofile(audio_path, verbose=False, logger=None)
+                    video_clip.close()
+                    
+                    # Extract text from video audio
+                    status_text.text("🎤 Extracting text from video audio...")
+                    transcribed_text = speech_to_text.transcribe_video(video_file, settings['language'])
+                    if transcribed_text:
+                        st.session_state.story_text = transcribed_text
+                        st.success(f"✅ Extracted {len(transcribed_text)} characters from video")
+                    
+                else:
+                    # Generate TTS seperti biasa
+                    status_text.text("🔊 Generating audio narration...")
+                    audio_path = generate_tts_sync(st.session_state.story_text, settings['language'])
+                
+                progress_bar.progress(33)
+                
+                if not audio_path:
+                    st.error("❌ Gagal mendapatkan audio")
+                    return
+                
+                st.session_state.audio_path = audio_path
+                
+                status_text.text("🎬 Step 2: Creating video with REAL karaoke...")
+                
+                # ✅ USE THE SELECTED MODE dengan auto-subtitle dan effects
+                video_path = video_editor.create_video(
+                    media_files=st.session_state.uploaded_files,
+                    audio_path=audio_path,
+                    duration=settings['duration'],
+                    video_format=settings['video_format'],
+                    subtitle_text=st.session_state.story_text,
+                    font_size=settings['font_size'],
+                    text_color=settings['text_color'],
+                    text_position=settings['text_position'],
+                    background_music=st.session_state.background_music_path,
+                    music_volume=settings['music_volume'],
+                    mode=video_mode,
+                    auto_subtitle=auto_subtitle,
+                    subtitle_language=settings['language'],
+                    text_effect=selected_effect
+                )
+                progress_bar.progress(66)
+                
+                if not video_path:
+                    st.error("❌ Gagal generate video")
+                    return
+                
+                st.session_state.video_path = video_path
+                st.session_state.video_mode = video_mode
+                
+                status_text.text("📊 Step 3: Optimizing content...")
+                try:
+                    st.session_state.optimized_content = content_optimizer.optimize_content(
+                        st.session_state.story_text,
+                        settings['niche'],
+                        settings['language']
+                    )
+                except:
+                    st.session_state.optimized_content = {
+                        'title': 'Generated Video',
+                        'description': st.session_state.story_text[:100] + '...',
+                        'hooks': ['Watch this amazing video!'],
+                        'hashtags': ['video', 'content'],
+                        'optimal_posting_times': []
+                    }
+                
+                progress_bar.progress(100)
+                
+                mode_name = "Video dengan Media" if video_mode == 'video' else "Teks Karaoke Only"
+                subtitle_source = "auto dari video" if auto_subtitle else "teks provided"
+                status_text.text(f"✅ {mode_name} dengan subtitle {subtitle_source} berhasil di-generate!")
+                
+                st.balloons()
+                
+            except Exception as e:
+                st.error(f"❌ Error generating video: {str(e)}")
+                import traceback
+                st.error(f"Detailed error: {traceback.format_exc()}")
+                progress_bar.progress(0)
+
+    def render_results(self):
+        """Render results section"""
+        if not st.session_state.get('video_path'):
+            return
+        
+        st.header("🎉 Hasil Video")
+        
+        # Show mode info
+        video_mode = st.session_state.get('video_mode', 'video')
+        mode_name = "Video dengan Media" if video_mode == 'video' else "Teks Karaoke Only"
+        
+        st.success(f"✅ {mode_name} berhasil dibuat!")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.subheader("📺 Preview Video")
+            
+            if os.path.exists(st.session_state.video_path):
+                try:
+                    with open(st.session_state.video_path, 'rb') as video_file:
+                        video_bytes = video_file.read()
+                    st.video(video_bytes)
+                    
+                    if video_mode == 'text_only':
+                        st.info("🎤 **Teks Karaoke Only:** Fokus pada teks dengan background hitam")
+                    else:
+                        st.info("🎤 **Fitur Karaoke:** Teks muncul kata demi kata sync dengan audio")
+                    
+                    # Download button for video
+                    st.download_button(
+                        label="📥 Download Video MP4",
+                        data=video_bytes,
+                        file_name=f"{'text_karaoke' if video_mode == 'text_only' else 'video'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
+                        mime="video/mp4",
+                        use_container_width=True,
+                        key="download_video_btn"
+                    )
+                except Exception as e:
+                    st.error(f"❌ Error loading video preview: {e}")
+            else:
+                st.error("❌ Video file not found")
+        
+        with col2:
+            st.subheader("📄 Download Assets")
+            
+            # Content assets download
+            if st.session_state.story_text:
+                combined_content = f"""VIDEO CONTENT ASSETS
+
+MODE: {mode_name}
+
+CERITA NARASI:
+{st.session_state.story_text}
+
+"""
+                if st.session_state.optimized_content:
+                    combined_content += f"""OPTIMASI KONTEN:
+Judul: {st.session_state.optimized_content.get('title', 'Generated Video')}
+
+Deskripsi:
+{st.session_state.optimized_content.get('description', 'No description')}
+
+Video Hooks:
+{chr(10).join([f"{i+1}. {hook}" for i, hook in enumerate(st.session_state.optimized_content.get('hooks', []))])}
+
+Hashtags:
+{' '.join([f'#{tag}' for tag in st.session_state.optimized_content.get('hashtags', [])])}
+
+Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+                
+                st.download_button(
+                    label="📋 Download Cerita + Optimasi",
+                    data=combined_content,
+                    file_name=f"content_assets_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                    key="download_content_btn"
+                )
+            
+            if st.session_state.audio_path and os.path.exists(st.session_state.audio_path):
+                try:
+                    with open(st.session_state.audio_path, "rb") as f:
+                        audio_bytes = f.read()
+                    
+                    st.download_button(
+                        label="🔊 Download Audio Narasi",
+                        data=audio_bytes,
+                        file_name=f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3",
+                        mime="audio/mpeg",
+                        use_container_width=True,
+                        key="download_audio_btn"
+                    )
+                except Exception as e:
+                    st.warning(f"Audio tidak tersedia: {e}")
+
+    def render_header(self):
+        """Render application header"""
+        st.markdown('<h1 class="main-header">🎬 AI Video Generator</h1>', unsafe_allow_html=True)
+        st.markdown("""
+        <div style='text-align: center; margin-bottom: 2rem;'>
+            <p style='font-size: 1.2rem; color: #666;'>
+                Buat video menarik dengan AI dalam hitungan menit!
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # System status overview
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            ffmpeg_status = "✅" if check_ffmpeg() else "❌"
+            st.info(f"🎥 FFmpeg: {ffmpeg_status}")
+        with col2:
+            moviepy_status = "✅" if MOVIEPY_AVAILABLE else "❌"
+            st.info(f"🎬 MoviePy: {moviepy_status}")
+        with col3:
+            tts_status = "✅" if TTS_AVAILABLE else "❌"
+            st.info(f"🔊 TTS: {tts_status}")
+        with col4:
+            try:
+                api_status = "✅" if hasattr(story_generator, 'api_key') and story_generator.api_key else "❌"
+                st.info(f"🤖 API: {api_status}")
+            except:
+                st.info(f"🤖 API: ❌")
+
+    def run(self):
+        """Main application runner"""
+        
+        # Check system dependencies
+        if not check_ffmpeg():
+            setup_ffmpeg_warning()
+        
+        self.render_header()
+        settings = self.render_sidebar()
+        
+        tab1, tab2, tab3, tab4 = st.tabs(["📁 Upload Media", "📖 Generate Cerita", "🎬 Buat Video", "📊 Hasil"])
+        
+        with tab1:
+            self.render_file_upload()
+        with tab2:
+            self.render_story_generator(settings)
+        with tab3:
+            self.render_video_generator(settings)
+        with tab4:
+            self.render_results()
+
+if __name__ == "__main__":
+    app = VideoGeneratorApp()
+    app.run()
